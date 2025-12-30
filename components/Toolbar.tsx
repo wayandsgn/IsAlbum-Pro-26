@@ -102,7 +102,7 @@ export const Toolbar: React.FC<ToolbarProps> = ({
       <div className="flex items-center gap-6">
         <button onClick={onReturnToWelcome} className="flex items-center gap-2 text-blue-400 font-bold text-xl tracking-tight" title="Voltar à tela inicial (Salva o projeto)">
           <Layout className="w-6 h-6" />
-          IsAlbum Pro
+          IsAlbum Pro 26
         </button>
 
         <div className="h-6 w-px bg-gray-700 mx-2"></div>

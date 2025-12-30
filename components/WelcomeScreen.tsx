@@ -115,7 +115,7 @@ export const WelcomeScreen: React.FC<WelcomeScreenProps> = ({
   return (
     <div className="flex flex-col items-center justify-center min-h-screen bg-gray-950 text-white p-8">
       <div className="text-center mb-12">
-        <h1 className="text-4xl font-bold text-blue-500 mb-2">IsAlbum Pro</h1>
+        <h1 className="text-4xl font-bold text-blue-500 mb-2">IsAlbum Pro 26</h1>
         <p className="text-gray-400">Crie álbuns profissionais em minutos.</p>
       </div>
       <div className="max-w-6xl w-full grid grid-cols-1 md:grid-cols-2 gap-12">
