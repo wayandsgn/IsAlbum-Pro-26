@@ -247,7 +247,7 @@ export const Toolbar: React.FC<ToolbarProps> = ({
          <button 
           onClick={onPreview}
           className="flex items-center gap-2 px-3 py-1.5 bg-gray-800 hover:bg-gray-700 text-white rounded-md text-xs font-medium transition-colors border border-gray-700"
-          title="Pré-visualizar Álbum (Flipbook)"
+          title="Pré-visualizar Álbum"
         >
           <Eye className="w-3.5 h-3.5 text-emerald-400" />
           Preview
@@ -264,23 +264,23 @@ export const Toolbar: React.FC<ToolbarProps> = ({
         <div className="h-6 w-px bg-gray-700 mx-1"></div>
 
         <div className="flex bg-gray-800 rounded-md border border-gray-700 overflow-hidden shadow-sm">
-            <button 
-              onClick={handleDistributeClick}
-              className="flex items-center gap-2 px-3 py-2 hover:bg-gray-700 text-white text-xs font-bold transition-colors border-r border-gray-700 uppercase tracking-wide"
-              title={isAutoDensity ? "Redistribuir em todas as lâminas selecionadas" : `Redistribuir (Entre ${minPhotos} e ${maxPhotos} fotos/lâmina)`}
-            >
-              <RefreshCw className="w-3.5 h-3.5 text-blue-400" />
-              Auto Distribuir
-            </button>
             {onRedistributeGlobal && (
                 <button 
                   onClick={onRedistributeGlobal}
-                  className="flex items-center gap-2 px-3 py-2 hover:bg-purple-900/30 text-purple-200 hover:text-white text-xs font-medium transition-colors"
+                  className="flex items-center gap-2 px-4 py-2 bg-purple-700 hover:bg-purple-600 text-white text-xs font-bold transition-colors border-r border-gray-900/50 uppercase tracking-wide"
                   title="Variar ordem e layout global"
                 >
                   <Shuffle className="w-3.5 h-3.5" />
+                  Variar
                 </button>
             )}
+            <button 
+              onClick={handleDistributeClick}
+              className="flex items-center justify-center px-4 py-2 hover:bg-gray-700 text-white text-xs font-bold transition-colors"
+              title={isAutoDensity ? "Redistribuir em todas as lâminas" : `Redistribuir (Entre ${minPhotos} e ${maxPhotos} fotos/lâmina)`}
+            >
+              <RefreshCw className="w-4 h-4 text-blue-400" />
+            </button>
         </div>
 
         <div className="h-6 w-px bg-gray-700 mx-1"></div>

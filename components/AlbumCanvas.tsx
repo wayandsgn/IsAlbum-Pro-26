@@ -1,11 +1,12 @@
 
+
 import React, { useRef, useState, useEffect } from 'react';
 import { AlbumConfig, Spread, Photo, Layer } from '../types';
 import { clsx } from 'clsx';
 import { 
   AlignLeft, AlignCenter, AlignRight, ArrowUpToLine, FoldVertical, ArrowDownToLine,
   Trash, Layout, Maximize2, Wand2, RotateCw, ZoomIn, BringToFront, SendToBack,
-  Grid as GridIcon, Magnet, ListRestart, Lock, Unlock, Trash2, Edit3
+  Grid as GridIcon, Magnet, ListRestart, Lock, Unlock, Trash2, Edit3, AlertTriangle
 } from 'lucide-react';
 
 export interface AlbumCanvasProps {
@@ -123,6 +124,11 @@ export const AlbumCanvas: React.FC<AlbumCanvasProps> = ({
     onSelectSpread();
     
     setContextMenu({ ...contextMenu, visible: false });
+    const photo = photos.find(p => p.id === layer.photoId);
+    if (photo?.isMissing) {
+        handleSelectionUpdate(new Set<string>([layer.id]));
+        return;
+    }
 
     if (editingLayerId === layer.id) {
         setInteractionMode('INTERNAL_EDIT');
@@ -193,6 +199,9 @@ export const AlbumCanvas: React.FC<AlbumCanvasProps> = ({
 
   const handleLayerDoubleClick = (e: React.MouseEvent, layer: Layer) => {
       e.stopPropagation();
+      const photo = photos.find(p => p.id === layer.photoId);
+      if (photo?.isMissing) return;
+
       setEditingLayerId(layer.id);
       handleSelectionUpdate(new Set([layer.id]));
       setInteractionMode('IDLE');
@@ -700,18 +709,18 @@ export const AlbumCanvas: React.FC<AlbumCanvasProps> = ({
               style={{
                 left: `${layer.x}%`, top: `${layer.y}%`, width: `${layer.width}%`, height: `${layer.height}%`,
                 transform: `rotate(${layer.rotation}deg)`,
-                cursor: isEditing ? 'grab' : ((spread.isLocked || layer.isLocked) ? 'default' : 'move')
+                cursor: isEditing ? 'grab' : ((spread.isLocked || layer.isLocked || photo.isMissing) ? 'default' : 'move')
               }}
-              draggable={!spread.isLocked && !layer.isLocked} 
+              draggable={!spread.isLocked && !layer.isLocked && !photo.isMissing} 
               onDragStart={(e) => {
-                  if (spread.isLocked || layer.isLocked) {
+                  if (!spread.isLocked && !layer.isLocked && !photo.isMissing) {
                       e.dataTransfer.setData('photoId', layer.photoId);
                       e.dataTransfer.setData('sourceLayerId', layer.id); 
                       e.dataTransfer.effectAllowed = 'move';
                   }
               }}
               onDragOver={(e) => {
-                  if (spread.isLocked) {
+                  if (!spread.isLocked) {
                        e.preventDefault();
                        e.dataTransfer.dropEffect = 'move';
                   }
@@ -723,23 +732,31 @@ export const AlbumCanvas: React.FC<AlbumCanvasProps> = ({
             >
               <div className={clsx(
                 "w-full h-full overflow-hidden bg-gray-100 relative select-none flex items-center justify-center",
+                photo.isMissing && "bg-red-500/10",
                 isEditing ? "ring-2 ring-emerald-500 shadow-[0_0_0_9999px_rgba(0,0,0,0.7)]" : (isSelected ? "ring-2 ring-blue-500 shadow-xl" : "shadow-sm"),
                 layer.isLocked && !isSelected && "ring-1 ring-red-500/50 hover:ring-red-400",
                 spread.isLocked && "hover:ring-2 hover:ring-purple-400 transition-all cursor-grab active:cursor-grabbing"
               )}>
-                 <img 
-                    src={photo.previewUrl} 
-                    className="pointer-events-none block"
-                    style={{
-                        width: isWide ? 'auto' : '100%',
-                        height: isWide ? '100%' : 'auto',
-                        maxWidth: 'none',
-                        maxHeight: 'none',
-                        objectFit: 'contain', 
-                        filter: `brightness(${100+adj.brightness}%) contrast(${100+adj.contrast}%) saturate(${100+adj.saturation}%) hue-rotate(${adj.temperature}deg)`,
-                        transform: `scale(${adj.scale}) translate(${adj.panX}px, ${adj.panY}px) rotate(${adj.rotation}deg)`
-                    }}
-                 />
+                 {photo.isMissing ? (
+                    <div className="flex flex-col items-center justify-center text-red-500/80 p-2 text-center">
+                        <AlertTriangle className="w-1/4 h-1/4 max-w-[48px] opacity-70" />
+                        <p className="text-[10px] font-bold mt-2 break-all">{photo.fileName}</p>
+                    </div>
+                 ) : (
+                    <img 
+                        src={photo.previewUrl} 
+                        className="pointer-events-none block"
+                        style={{
+                            width: isWide ? 'auto' : '100%',
+                            height: isWide ? '100%' : 'auto',
+                            maxWidth: 'none',
+                            maxHeight: 'none',
+                            objectFit: 'contain', 
+                            filter: `brightness(${100+adj.brightness}%) contrast(${100+adj.contrast}%) saturate(${100+adj.saturation}%) hue-rotate(${adj.temperature}deg)`,
+                            transform: `scale(${adj.scale}) translate(${adj.panX}px, ${adj.panY}px) rotate(${adj.rotation}deg)`
+                        }}
+                    />
+                 )}
                  {!isEditing && !isSelected && <div className="absolute inset-0 hover:bg-blue-500/20 transition-colors" />}
                  
                  {layer.isLocked && (
@@ -750,7 +767,7 @@ export const AlbumCanvas: React.FC<AlbumCanvasProps> = ({
                      </div>
                  )}
 
-                 {(isSelected || isEditing) && (
+                 {(isSelected || isEditing) && !photo.isMissing && (
                      <div className="absolute inset-0 pointer-events-none opacity-40">
                          <div className="absolute left-1/3 w-px h-full bg-white/50 shadow-sm" />
                          <div className="absolute right-1/3 w-px h-full bg-white/50 shadow-sm" />
@@ -782,7 +799,7 @@ export const AlbumCanvas: React.FC<AlbumCanvasProps> = ({
                  )}
               </div>
 
-              {isSelected && !isEditing && !spread.isLocked && !layer.isLocked && (
+              {isSelected && !isEditing && !spread.isLocked && !layer.isLocked && !photo.isMissing && (
                  <>
                     {/* Rotation Handle */}
                     <div className="absolute -top-8 left-1/2 -translate-x-1/2 flex flex-col items-center z-50 cursor-grab active:cursor-grabbing group/rot"

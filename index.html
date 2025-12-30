@@ -37,27 +37,29 @@
       ::-webkit-scrollbar-thumb:hover {
         background: #6b7280; 
       }
+      
     </style>
-  <script type="importmap">
+<script type="importmap">
 {
   "imports": {
     "react/": "https://esm.sh/react@^19.2.3/",
     "react": "https://esm.sh/react@^19.2.3",
     "react-dom/": "https://esm.sh/react-dom@^19.2.3/",
-    "clsx": "https://esm.sh/clsx@^2.1.1",
     "lucide-react": "https://esm.sh/lucide-react@^0.562.0",
-    "jspdf": "https://esm.sh/jspdf@2.5.1",
-    "ag-psd": "https://esm.sh/ag-psd@^29.0.0",
+    "clsx": "https://esm.sh/clsx@^2.1.1",
+    "jspdf": "https://esm.sh/jspdf@^3.0.4",
     "electron": "https://esm.sh/electron@^39.2.7",
     "path": "https://esm.sh/path@^0.12.7",
-    "fs": "https://esm.sh/fs@^0.0.1-security"
+    "ag-psd": "https://esm.sh/ag-psd@^29.0.0",
+    "fs": "https://esm.sh/fs@^0.0.1-security",
+    "mime-types": "https://esm.sh/mime-types@^3.0.2"
   }
 }
 </script>
 </head>
   <body class="bg-gray-950 text-white overflow-hidden">
     <div id="root"></div>
-    <!-- Load the main React component directly -->
-    <script type="module" src="./index.tsx"></script>
+    <!-- The React application should be bundled into index.js for Electron -->
+    <script type="module" src="./index.js"></script>
   </body>
 </html>

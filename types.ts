@@ -1,5 +1,8 @@
 
 
+
+
+
 export interface Dimensions {
   width: number;
   height: number;
@@ -12,8 +15,20 @@ export interface Position {
 
 export interface Photo {
   id: string;
-  file: File;
-  previewUrl: string;
+  file: File | null; // Can be null if missing
+  path: string; // Original absolute path of the file
+  fileName: string;
+  previewUrl: string; // Data URL or object URL
+  width: number;
+  height: number;
+  aspectRatio: number;
+  isMissing?: boolean;
+}
+
+export interface PhotoMetadata {
+  id: string;
+  path: string;
+  fileName: string;
   width: number;
   height: number;
   aspectRatio: number;
@@ -74,6 +89,7 @@ export interface SavedProject {
   lastModified: number;
   config: AlbumConfig;
   spreads: Spread[];
+  photos: PhotoMetadata[]; // Store photo info for relinking
 }
 
 export enum LayoutMode {
@@ -89,4 +105,34 @@ export interface AlbumPreset {
   height: number;
   unit: Unit;
   dpi: number;
+}
+
+export interface LoadedImage {
+  success: boolean;
+  path: string;
+  dataUrl?: string;
+  mimeType?: string;
+}
+
+export interface RelinkedFile {
+    id: string;
+    newPath: string;
+    fileName: string;
+    dataUrl: string;
+    mimeType: string;
+}
+
+export interface ElectronAPI {
+    saveFile: (options: {
+        title: string;
+        defaultPath: string;
+        filters: { name: string; extensions: string[] }[];
+        data: Uint8Array;
+    }) => Promise<{ success: boolean; path?: string; error?: string }>;
+    loadImageFromPath: (path: string) => Promise<LoadedImage>;
+    selectDirectory: () => Promise<string | null>;
+    findAndLoadFiles: (options: { 
+        directoryPath: string; 
+        filesToFind: { id: string, fileName: string }[] 
+    }) => Promise<RelinkedFile[]>;
 }

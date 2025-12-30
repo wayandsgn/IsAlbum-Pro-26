@@ -2,7 +2,13 @@
 {
   "name": "isalbum-pro-26",
   "version": "1.0.0",
-  "description": "Professional album diagramming tool for the web",
+  "description": "A professional album diagramming tool with smart auto-distribution, layout management, and native PSD export capabilities.",
+  "main": "electron/main.js",
+  "scripts": {
+    "start": "electron .",
+    "build:electron": "tsc --project tsconfig.electron.json",
+    "package": "npm run build:electron && electron-builder"
+  },
   "author": "IsAlbum Pro",
   "license": "MIT",
   "dependencies": {
@@ -12,5 +18,49 @@
     "clsx": "^2.1.1",
     "ag-psd": "^29.0.0",
     "jspdf": "^2.5.1"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.9",
+    "electron": "^31.0.1",
+    "electron-builder": "^24.13.3",
+    "typescript": "^5.4.5"
+  },
+  "build": {
+    "appId": "com.isalbum.pro26",
+    "productName": "IsAlbum Pro 26",
+    "directories": {
+      "output": "release",
+      "buildResources": "assets"
+    },
+    "files": [
+      "electron/main.js",
+      "electron/preload.js",
+      "index.html",
+      "index.js",
+      "assets/**/*"
+    ],
+    "win": {
+      "target": "nsis",
+      "icon": "assets/icon.svg"
+    },
+    "mac": {
+      "icon": "assets/icon.svg"
+    },
+    "linux": {
+      "icon": "assets/icon.svg"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true
+    },
+    "fileAssociations": [
+      {
+        "ext": "aaproj",
+        "name": "IsAlbum Project File",
+        "description": "Projeto do IsAlbum Pro 26",
+        "role": "Editor",
+        "icon": "icon.svg"
+      }
+    ]
   }
 }

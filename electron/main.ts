@@ -1,9 +1,10 @@
-// Fix: Manually declare __dirname as it is not available in the TS scope without node types.
-declare const __dirname: string;
+/// <reference types="node" />
+// FIX: The triple-slash reference directive must be the very first thing in the file to be recognized by the TypeScript compiler. This change ensures Node.js types are loaded, resolving errors for `__dirname` and `process.platform`.
 
 import { app, BrowserWindow, ipcMain, dialog } from 'electron';
 import path from 'path';
 import fs from 'fs';
+import mime from 'mime-types';
 
 function createWindow() {
   const win = new BrowserWindow({
@@ -14,7 +15,7 @@ function createWindow() {
       contextIsolation: true,
       nodeIntegration: false,
     },
-    icon: path.join(__dirname, '../assets/icon.png')
+    icon: path.join(__dirname, '../assets/icon.svg')
   });
 
   win.loadFile('index.html');
@@ -34,9 +35,7 @@ app.whenReady().then(() => {
 });
 
 app.on('window-all-closed', () => {
-  // Fix: Cast `process` to `any` to access `platform` property,
-  // as the default `Process` type is incomplete without node types.
-  if ((process as any).platform !== 'darwin') {
+  if (process.platform !== 'darwin') {
     app.quit();
   }
 });
@@ -60,4 +59,57 @@ ipcMain.handle('save-dialog', async (event, { title, defaultPath, filters, data 
     }
     
     return { success: false, error: 'Save cancelled by user.' };
+});
+
+// IPC handler to load a local image file
+ipcMain.handle('load-image-from-path', async (event, filePath) => {
+    try {
+        if (fs.existsSync(filePath)) {
+            const buffer = fs.readFileSync(filePath);
+            const mimeType = mime.lookup(filePath) || 'application/octet-stream';
+            const dataUrl = `data:${mimeType};base64,${buffer.toString('base64')}`;
+            return { success: true, path: filePath, dataUrl, mimeType };
+        }
+        return { success: false, path: filePath, error: 'File not found' };
+    } catch (error) {
+        console.error(`Failed to load image from ${filePath}:`, error);
+        return { success: false, path: filePath, error: (error as Error).message };
+    }
+});
+
+// IPC handler to open a directory selection dialog
+ipcMain.handle('select-directory', async () => {
+    const { canceled, filePaths } = await dialog.showOpenDialog({
+        properties: ['openDirectory']
+    });
+    if (!canceled && filePaths.length > 0) {
+        return filePaths[0];
+    }
+    return null;
+});
+
+// IPC handler to find and load multiple files in a directory
+ipcMain.handle('find-and-load-files', async (event, { directoryPath, filesToFind }) => {
+    const foundFiles: { id: string, newPath: string, fileName: string, dataUrl: string, mimeType: string }[] = [];
+    try {
+        const dirContents = fs.readdirSync(directoryPath);
+        const dirFileSet = new Set(dirContents);
+
+        for (const fileToFind of filesToFind) {
+            if (dirFileSet.has(fileToFind.fileName)) {
+                const newPath = path.join(directoryPath, fileToFind.fileName);
+                try {
+                    const buffer = fs.readFileSync(newPath);
+                    const mimeType = mime.lookup(newPath) || 'application/octet-stream';
+                    const dataUrl = `data:${mimeType};base64,${buffer.toString('base64')}`;
+                    foundFiles.push({ ...fileToFind, newPath, dataUrl, mimeType });
+                } catch (readError) {
+                    console.error(`Error reading relinked file ${newPath}:`, readError);
+                }
+            }
+        }
+    } catch (error) {
+        console.error(`Error processing directory ${directoryPath}:`, error);
+    }
+    return foundFiles;
 });

@@ -1,4 +1,5 @@
 
+
 import React, { useState, useEffect, useRef } from 'react';
 import { PhotoSidebar } from './components/PhotoSidebar';
 import { Toolbar } from './components/Toolbar';
@@ -7,27 +8,29 @@ import { WelcomeScreen } from './components/WelcomeScreen';
 import { PropertiesPanel } from './components/PropertiesPanel';
 import { BookPreviewModal } from './components/BookPreviewModal';
 import { ExportModal } from './components/ExportModal';
-import { Photo, Spread, AlbumConfig, Layer, SavedProject } from './types';
+import { Photo, Spread, AlbumConfig, Layer, SavedProject, ElectronAPI, PhotoMetadata, LoadedImage, RelinkedFile } from './types';
 import { distributePhotosToSpreads, generateAlternativeLayouts, generateNoCropRowLayout, distributePhotosFromIndex, generateSmartMosaicLayout, generateUniqueVariations, getLayoutHash, generateStructuredLayout } from './utils/layoutGenerator';
 import { exportSpreadToPSD, exportSpreadToJPG, exportSpreadToPDF, exportMultipleSpreadsToPDF } from './services/exportService';
 import { X, RefreshCw, AlertCircle, Plus } from 'lucide-react';
 
-// Web-based file download helper
-const downloadBlob = (blob: Blob, fileName: string) => {
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = fileName;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
-};
+// Make TypeScript aware of the Electron API exposed on the window object
+declare global {
+    interface Window {
+        electronAPI: ElectronAPI;
+    }
+}
 
 type ViewState = 'WELCOME' | 'WORKSPACE';
 
 interface HistoryState {
   spreads: Spread[];
+}
+
+// Helper to convert a data URL to a File object
+async function dataUrlToFile(dataUrl: string, fileName: string, mimeType: string): Promise<File> {
+    const res = await fetch(dataUrl);
+    const blob = await res.blob();
+    return new File([blob], fileName, { type: mimeType });
 }
 
 const App: React.FC = () => {
@@ -68,6 +71,7 @@ const App: React.FC = () => {
   });
   
   const [totalSpreads, setTotalSpreads] = useState(10);
+  const missingPhotos = photos.filter(p => p.isMissing);
 
   useEffect(() => {
     const history = localStorage.getItem('album_architect_history');
@@ -151,26 +155,43 @@ const App: React.FC = () => {
   };
 
   const handleSaveProject = async () => {
+    // Create serializable metadata from the photos state
+    const photoMetadata: PhotoMetadata[] = photos.map(p => ({
+        id: p.id,
+        path: p.path,
+        fileName: p.fileName,
+        width: p.width,
+        height: p.height,
+        aspectRatio: p.aspectRatio,
+    }));
+
     const projectData: SavedProject = {
       id: currentProjectId || Date.now().toString(),
       name: config.projectName,
       lastModified: Date.now(),
       config,
-      spreads
+      spreads,
+      photos: photoMetadata
     };
     updateProjectHistory(projectData);
     
     const jsonString = JSON.stringify(projectData, null, 2);
-    const blob = new Blob([jsonString], { type: 'application/json' });
-    downloadBlob(blob, `${config.projectName.replace(/\s+/g, '_')}.aaproj`);
+    const dataBuffer = new TextEncoder().encode(jsonString);
+
+    await window.electronAPI.saveFile({
+        title: 'Salvar Projeto',
+        defaultPath: `${config.projectName.replace(/\s+/g, '_')}.aaproj`,
+        filters: [{ name: 'IsAlbum Project', extensions: ['aaproj'] }],
+        data: dataBuffer
+    });
   };
 
   const handleLoadProjectFile = (file: File) => {
     const reader = new FileReader();
-    reader.onload = (e) => {
+    reader.onload = async (e) => {
       try {
         const data = JSON.parse(e.target?.result as string) as SavedProject;
-        loadProjectIntoState(data);
+        await loadProjectIntoState(data);
       } catch (err) {
         alert("Erro ao ler arquivo de projeto.");
       }
@@ -178,10 +199,23 @@ const App: React.FC = () => {
     reader.readAsText(file);
   };
 
-  const loadProjectIntoState = (data: SavedProject) => {
+  const loadProjectIntoState = async (data: SavedProject) => {
     setConfig(data.config);
     setSpreads(data.spreads);
-    setPhotos([]); 
+
+    const photoPromises = (data.photos || []).map(async (meta): Promise<Photo> => {
+        const loadedImage: LoadedImage = await window.electronAPI.loadImageFromPath(meta.path);
+        if (loadedImage.success && loadedImage.dataUrl) {
+            const file = await dataUrlToFile(loadedImage.dataUrl, meta.fileName, loadedImage.mimeType!);
+            return { ...meta, file, previewUrl: loadedImage.dataUrl, isMissing: false };
+        } else {
+            return { ...meta, file: null, previewUrl: '', isMissing: true };
+        }
+    });
+
+    const loadedPhotos = await Promise.all(photoPromises);
+    setPhotos(loadedPhotos);
+
     setHistory([{ spreads: data.spreads }]);
     historyIndex.current = 0;
     alert(`Projeto "${data.name}" carregado.`);
@@ -189,16 +223,39 @@ const App: React.FC = () => {
     setCurrentProjectId(data.id);
   };
 
+  const handleRelink = async () => {
+      const directoryPath = await window.electronAPI.selectDirectory();
+      if (!directoryPath) return;
+
+      const filesToFind = missingPhotos.map(p => ({ id: p.id, fileName: p.fileName }));
+      const relinkedFiles = await window.electronAPI.findAndLoadFiles({ directoryPath, filesToFind });
+
+      if (relinkedFiles.length === 0) {
+          alert("Nenhuma foto correspondente encontrada na pasta selecionada.");
+          return;
+      }
+
+      const relinkedMap = new Map<string, RelinkedFile>(relinkedFiles.map(f => [f.id, f]));
+
+      const photoUpdatePromises = photos.map(async (p): Promise<Photo> => {
+          if (p.isMissing && relinkedMap.has(p.id)) {
+              const relinked = relinkedMap.get(p.id)!;
+              const file = await dataUrlToFile(relinked.dataUrl, relinked.fileName, relinked.mimeType);
+              return { ...p, file, path: relinked.newPath, previewUrl: relinked.dataUrl, isMissing: false };
+          }
+          return p;
+      });
+
+      const updatedPhotos = await Promise.all(photoUpdatePromises);
+      setPhotos(updatedPhotos);
+
+      alert(`${relinkedFiles.length} de ${filesToFind.length} fotos ausentes foram relincadas com sucesso!`);
+  };
+
   const handleReturnToWelcome = () => {
       if (currentProjectId && (spreads.length > 0 || photos.length > 0)) {
-          const projectData: SavedProject = {
-              id: currentProjectId,
-              name: config.projectName,
-              lastModified: Date.now(),
-              config,
-              spreads,
-          };
-          updateProjectHistory(projectData);
+          // Trigger an auto-save before returning
+          handleSaveProject();
       }
       setView('WELCOME');
   };
@@ -210,7 +267,7 @@ const App: React.FC = () => {
       const remappedSpreads = spreads.map(s => {
           const spreadPhotos = s.layers
              .map(l => photos.find(p => p.id === l.photoId))
-             .filter(Boolean) as Photo[];
+             .filter((p): p is Photo => !!p);
           
           if (spreadPhotos.length === 0) return s;
 
@@ -231,7 +288,7 @@ const App: React.FC = () => {
               if (s.id !== activeSpreadId) return s;
               const spreadPhotos = s.layers
                   .map(l => photos.find(p => p.id === l.photoId))
-                  .filter(Boolean) as Photo[];
+                  .filter((p): p is Photo => !!p);
               
               if (spreadPhotos.length === 0) return s;
 
@@ -244,7 +301,7 @@ const App: React.FC = () => {
 
   const handleUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files) {
-      const newPhotosPromises = Array.from(e.target.files).map(async (file: File) => {
+      const newPhotosPromises = Array.from(e.target.files).map(async (file: File & { path: string }) => {
         return new Promise<Photo>((resolve) => {
            const img = new Image();
            const url = URL.createObjectURL(file);
@@ -252,10 +309,13 @@ const App: React.FC = () => {
              resolve({
                 id: Math.random().toString(36).substr(2, 9),
                 file: file,
+                path: file.path, // Electron provides the full path
+                fileName: file.name,
                 previewUrl: url,
                 width: img.naturalWidth, 
                 height: img.naturalHeight,
-                aspectRatio: img.naturalWidth / img.naturalHeight
+                aspectRatio: img.naturalWidth / img.naturalHeight,
+                isMissing: false
              });
            };
            img.src = url;
@@ -409,7 +469,7 @@ const App: React.FC = () => {
           const remainingPhotos = s.layers
              .filter(l => !layerIds.includes(l.id))
              .map(l => photos.find(p => p.id === l.photoId))
-             .filter(Boolean) as Photo[];
+             .filter((p): p is Photo => !!p);
           
           if (remainingPhotos.length === 0) {
               return { ...s, layers: [] };
@@ -434,7 +494,7 @@ const App: React.FC = () => {
           
           const photosToRedistribute = unlockedLayers
              .map(l => photos.find(p => p.id === l.photoId))
-             .filter(Boolean) as Photo[];
+             .filter((p): p is Photo => !!p);
 
           if (photosToRedistribute.length === 0) return s;
           
@@ -528,7 +588,7 @@ const App: React.FC = () => {
             if (sourceLayer && !sourceLayer.isLocked) {
                 const remainingPhotos = sourceSpread.layers
                     .filter(l => l.photoId !== photoId)
-                    .map(l => photos.find(p => p.id === l.photoId)).filter(Boolean) as Photo[];
+                    .map(l => photos.find(p => p.id === l.photoId)).filter((p): p is Photo => !!p);
                 
                 const lockedInSource = sourceSpread.layers.filter(l => l.isLocked && l.photoId !== photoId);
                 const unlockedPhotos = remainingPhotos.filter(p => !lockedInSource.some(l => l.photoId === p.id));
@@ -551,7 +611,7 @@ const App: React.FC = () => {
         if (currentTargetSpread.isLocked) return prev;
 
         const targetPhotos = currentTargetSpread.layers
-            .map(l => photos.find(p => p.id === l.photoId)).filter(Boolean) as Photo[];
+            .map(l => photos.find(p => p.id === l.photoId)).filter((p): p is Photo => !!p);
         
         const photoToAdd = photos.find(p => p.id === photoId);
         if (photoToAdd) {
@@ -590,15 +650,26 @@ const App: React.FC = () => {
       try {
           if (format === 'PDF') {
               const blob = await exportMultipleSpreadsToPDF(spreadsToExport, photos, config);
-              downloadBlob(blob, `${config.projectName}.pdf`);
+              const buffer = new Uint8Array(await blob.arrayBuffer());
+              await window.electronAPI.saveFile({
+                  title: 'Salvar PDF', defaultPath: `${config.projectName}.pdf`,
+                  filters: [{ name: 'PDF', extensions: ['pdf'] }], data: buffer
+              });
           } else {
               for (const spread of spreadsToExport) {
                   let blob: Blob; let ext: string;
                   if (format === 'PSD') { blob = await exportSpreadToPSD(spread, photos, config); ext = 'psd'; }
                   else { blob = await exportSpreadToJPG(spread, photos, config); ext = 'jpg'; }
                   
+                  const buffer = new Uint8Array(await blob.arrayBuffer());
                   const idxStr = String(spread.index).padStart(2, '0');
-                  downloadBlob(blob, `${config.projectName}_Lamina_${idxStr}.${ext}`);
+                  
+                  await window.electronAPI.saveFile({
+                      title: `Salvar Lâmina ${spread.index}`,
+                      defaultPath: `${config.projectName}_Lamina_${idxStr}.${ext}`,
+                      filters: [{ name: format, extensions: [ext] }],
+                      data: buffer
+                  });
               }
           }
       } catch (error) {
@@ -616,7 +687,7 @@ const App: React.FC = () => {
           alert("Adicione fotos à lâmina para ver sugestões.");
           return;
       }
-      const photosInSpread = spread.layers.map(l => photos.find(p => p.id === l.photoId)).filter(Boolean) as Photo[];
+      const photosInSpread = spread.layers.map(l => photos.find(p => p.id === l.photoId)).filter((p): p is Photo => !!p);
       const suggestions = generateAlternativeLayouts(photosInSpread, config);
       const initialHashes = new Set<string>();
       suggestions.forEach(s => initialHashes.add(getLayoutHash(s.layers)));
@@ -630,7 +701,7 @@ const App: React.FC = () => {
       if (!activeSpreadId) return;
       const spread = spreads.find(s => s.id === activeSpreadId);
       if (!spread) return;
-      const photosInSpread = spread.layers.map(l => photos.find(p => p.id === l.photoId)).filter(Boolean) as Photo[];
+      const photosInSpread = spread.layers.map(l => photos.find(p => p.id === l.photoId)).filter((p): p is Photo => !!p);
       const { results, exhausted } = generateUniqueVariations(photosInSpread, config, seenLayoutHashes, 6);
       if (results.length > 0) setLayoutSuggestions(prev => [...prev, ...results]);
       // Exhausted check removed to allow infinite generation
@@ -699,6 +770,8 @@ const App: React.FC = () => {
           photoUsage={photoUsage}
           onUpload={handleUpload}
           onRemove={handleRemovePhoto}
+          onRelink={handleRelink}
+          missingCount={missingPhotos.length}
         />
 
         <main className="flex-1 overflow-y-auto bg-gray-900/50 p-12 flex flex-col items-center custom-scrollbar"
@@ -800,7 +873,7 @@ const App: React.FC = () => {
                                                 <div key={l.id} className="absolute overflow-hidden bg-gray-200"
                                                       style={{ left: `${l.x}%`, top: `${l.y}%`, width: `${l.width}%`, height: `${l.height}%` }}
                                                 >
-                                                    {photo && <img src={photo.previewUrl} className="w-full h-full object-cover" alt="" loading="lazy" />}
+                                                    {photo && !photo.isMissing && <img src={photo.previewUrl} className="w-full h-full object-cover" alt="" loading="lazy" />}
                                                 </div>
                                             );
                                         })}
