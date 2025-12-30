@@ -68,7 +68,7 @@ export interface AlbumConfig {
 }
 
 export interface SavedProject {
-  id: string;
+  id:string;
   name: string;
   thumbnail?: string; // Data URL
   lastModified: number;

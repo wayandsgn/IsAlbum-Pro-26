@@ -12,6 +12,18 @@ import { distributePhotosToSpreads, generateAlternativeLayouts, generateNoCropRo
 import { exportSpreadToPSD, exportSpreadToJPG, exportSpreadToPDF, exportMultipleSpreadsToPDF } from './services/exportService';
 import { X, RefreshCw, AlertCircle, Plus } from 'lucide-react';
 
+// Web-based file download helper
+const downloadBlob = (blob: Blob, fileName: string) => {
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = fileName;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+};
+
 type ViewState = 'WELCOME' | 'WORKSPACE';
 
 interface HistoryState {
@@ -138,7 +150,7 @@ const App: React.FC = () => {
     setCurrentProjectId(Date.now().toString() + Math.random());
   };
 
-  const handleSaveProject = () => {
+  const handleSaveProject = async () => {
     const projectData: SavedProject = {
       id: currentProjectId || Date.now().toString(),
       name: config.projectName,
@@ -147,13 +159,10 @@ const App: React.FC = () => {
       spreads
     };
     updateProjectHistory(projectData);
-    const blob = new Blob([JSON.stringify(projectData, null, 2)], { type: 'application/json' });
-    const link = document.createElement('a');
-    link.href = URL.createObjectURL(blob);
-    link.download = `${config.projectName.replace(/\s+/g, '_')}.aaproj`;
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
+    
+    const jsonString = JSON.stringify(projectData, null, 2);
+    const blob = new Blob([jsonString], { type: 'application/json' });
+    downloadBlob(blob, `${config.projectName.replace(/\s+/g, '_')}.aaproj`);
   };
 
   const handleLoadProjectFile = (file: File) => {
@@ -581,34 +590,15 @@ const App: React.FC = () => {
       try {
           if (format === 'PDF') {
               const blob = await exportMultipleSpreadsToPDF(spreadsToExport, photos, config);
-              const link = document.createElement('a');
-              link.href = URL.createObjectURL(blob);
-              link.download = `${config.projectName}.pdf`;
-              document.body.appendChild(link);
-              link.click();
-              document.body.removeChild(link);
+              downloadBlob(blob, `${config.projectName}.pdf`);
           } else {
               for (const spread of spreadsToExport) {
-                  let blob: Blob;
-                  let ext: string;
+                  let blob: Blob; let ext: string;
+                  if (format === 'PSD') { blob = await exportSpreadToPSD(spread, photos, config); ext = 'psd'; }
+                  else { blob = await exportSpreadToJPG(spread, photos, config); ext = 'jpg'; }
                   
-                  if (format === 'PSD') {
-                      blob = await exportSpreadToPSD(spread, photos, config);
-                      ext = 'psd';
-                  } else {
-                      blob = await exportSpreadToJPG(spread, photos, config);
-                      ext = 'jpg';
-                  }
-
-                  const link = document.createElement('a');
-                  link.href = URL.createObjectURL(blob);
                   const idxStr = String(spread.index).padStart(2, '0');
-                  link.download = `${config.projectName}_Lamina_${idxStr}.${ext}`;
-                  document.body.appendChild(link);
-                  link.click();
-                  document.body.removeChild(link);
-                  
-                  await new Promise(r => setTimeout(r, 500)); 
+                  downloadBlob(blob, `${config.projectName}_Lamina_${idxStr}.${ext}`);
               }
           }
       } catch (error) {
