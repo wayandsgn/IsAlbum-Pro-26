@@ -276,15 +276,28 @@ export const generateSmartMosaicLayout = (
     photos: Photo[], 
     config: AlbumConfig,
     shuffle: boolean = false,
-    forceRowCount?: number
+    forceRowCount?: number,
+    bounds?: { x: number, y: number, width: number, height: number }
 ): Layer[] => {
     if (photos.length === 0) return [];
     
     let workingPhotos = [...photos];
     if (shuffle) workingPhotos.sort(() => Math.random() - 0.5);
+    
+    let availablePixelWidth, availablePixelHeight, startX_Px_Base, startY_Px_Base;
 
-    const availablePixelWidth = config.spreadWidth - (config.margin * 2);
-    const availablePixelHeight = config.spreadHeight - (config.margin * 2);
+    if (bounds) {
+        availablePixelWidth = (bounds.width / 100) * config.spreadWidth;
+        availablePixelHeight = (bounds.height / 100) * config.spreadHeight;
+        startX_Px_Base = (bounds.x / 100) * config.spreadWidth;
+        startY_Px_Base = (bounds.y / 100) * config.spreadHeight;
+    } else {
+        availablePixelWidth = config.spreadWidth - (config.margin * 2);
+        availablePixelHeight = config.spreadHeight - (config.margin * 2);
+        startX_Px_Base = config.margin;
+        startY_Px_Base = config.margin;
+    }
+
     
     // Function to calculate a layout given a specific number of rows
     const calculateLayoutForRows = (rowCount: number) => {
@@ -410,9 +423,9 @@ export const generateSmartMosaicLayout = (
     const finalContentHeight = bestLayout.totalContentHeight * bestLayout.scaleFactor;
     const finalContentWidth = availablePixelWidth * bestLayout.scaleFactor;
     
-    // Center the block in the spread (Harmonious Whitespace)
-    const startY_Px = config.margin + (availablePixelHeight - finalContentHeight) / 2;
-    const startX_Px = config.margin + (availablePixelWidth - finalContentWidth) / 2;
+    // Center the block in the BOUNDED AREA
+    const startY_Px = startY_Px_Base + (availablePixelHeight - finalContentHeight) / 2;
+    const startX_Px = startX_Px_Base + (availablePixelWidth - finalContentWidth) / 2;
 
     let currentY_Px = startY_Px;
 

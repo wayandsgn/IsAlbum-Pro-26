@@ -1,12 +1,11 @@
 
-
 import React, { useRef, useState, useEffect } from 'react';
 import { AlbumConfig, Spread, Photo, Layer } from '../types';
 import { clsx } from 'clsx';
 import { 
   AlignLeft, AlignCenter, AlignRight, ArrowUpToLine, FoldVertical, ArrowDownToLine,
-  Trash, Layout, Maximize2, Wand2, RotateCw, ZoomIn, BringToFront, SendToBack,
-  Grid as GridIcon, Magnet, ListRestart, Lock, Unlock, Trash2, Edit3, AlertTriangle
+  Trash2 as Trash, Layout, Maximize2, Wand2, RotateCw, BringToFront, SendToBack,
+  Grid as GridIcon, Magnet, ListRestart, Lock, Unlock, Edit3, AlertTriangle, Shuffle
 } from 'lucide-react';
 
 export interface AlbumCanvasProps {
@@ -46,11 +45,13 @@ interface GapGuide {
 export const AlbumCanvas: React.FC<AlbumCanvasProps> = ({ 
   spread, photos, config, isActive, onSelectSpread, onUpdateLayers, onDeleteLayers, onDeleteSpread,
   onPhotoDrop, onShowTemplates, onRedistribute, onDistributeFromHere, onToggleLock, onUndo, canUndo,
-  selectedLayerIds: controlledSelectedLayerIds, onSelectionChange
+  // Fix: Renamed controlledSelectedLayerIds to selectedLayerIds to match AlbumCanvasProps
+  selectedLayerIds: controlledSelectedLayerIdsFromProps, onSelectionChange
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const [internalSelectedLayerIds, setInternalSelectedLayerIds] = useState<Set<string>>(new Set());
-  const selectedLayerIds = controlledSelectedLayerIds ?? internalSelectedLayerIds;
+  // Fix: Use the prop-controlled selectedLayerIds if available, otherwise use internal state
+  const selectedLayerIds = controlledSelectedLayerIdsFromProps ?? internalSelectedLayerIds;
 
   const [interactionMode, setInteractionMode] = useState<InteractionMode>('IDLE');
   const [activeHandle, setActiveHandle] = useState<ResizeHandle | 'rot' | null>(null);
@@ -71,6 +72,12 @@ export const AlbumCanvas: React.FC<AlbumCanvasProps> = ({
   const groupBounds = useRef<{ x: number; y: number; w: number; h: number } | null>(null);
   const rotationStart = useRef<{ startAngle: number, centerX: number, centerY: number } | null>(null);
 
+  // Create a ref to hold the latest spread object to prevent stale closures in event handlers.
+  const spreadRef = useRef(spread);
+  useEffect(() => {
+    spreadRef.current = spread;
+  }, [spread]);
+
   const aspectRatio = config.spreadWidth / config.spreadHeight;
 
   const gapPctX = (config.gap / config.spreadWidth) * 100;
@@ -85,7 +92,8 @@ export const AlbumCanvas: React.FC<AlbumCanvasProps> = ({
         newSet = update;
     }
     if (onSelectionChange) onSelectionChange(newSet);
-    if (!controlledSelectedLayerIds) setInternalSelectedLayerIds(newSet);
+    // Fix: Only update internal state if it's not controlled by props
+    if (controlledSelectedLayerIdsFromProps === undefined) setInternalSelectedLayerIds(newSet);
   };
 
   const handleToggleLayerLock = (e: React.MouseEvent, layer: Layer) => {
@@ -133,7 +141,7 @@ export const AlbumCanvas: React.FC<AlbumCanvasProps> = ({
     if (editingLayerId === layer.id) {
         setInteractionMode('INTERNAL_EDIT');
         dragStart.current = { x: e.clientX, y: e.clientY };
-        initialLayersState.current = new Map([[layer.id, { ...layer }]]);
+        initialLayersState.current = new Map([[layer.id, { ...layer, adjustments: { ...layer.adjustments } }]]);
         return;
     }
     
@@ -256,23 +264,6 @@ export const AlbumCanvas: React.FC<AlbumCanvasProps> = ({
       }
   };
 
-  const handleContentResizeStart = (e: React.MouseEvent, handle: ResizeHandle, layer: Layer) => {
-      e.stopPropagation();
-      setInteractionMode('INTERNAL_SCALE');
-      setActiveHandle(handle);
-      dragStart.current = { x: e.clientX, y: e.clientY };
-      initialLayersState.current = new Map([[layer.id, { ...layer }]]);
-  };
-
-  const handleWheel = (e: React.WheelEvent, layer: Layer) => {
-      if (editingLayerId !== layer.id) return;
-      e.stopPropagation();
-      const zoomSensitivity = 0.001;
-      const newScale = Math.max(0.1, Math.min(5, layer.adjustments.scale - e.deltaY * zoomSensitivity));
-      const updatedLayers = spread.layers.map(l => l.id !== layer.id ? l : { ...l, adjustments: { ...l.adjustments, scale: newScale }});
-      onUpdateLayers(spread.id, updatedLayers);
-  };
-
   const updateContentRotation = (layerId: string, delta: number) => {
       const updatedLayers = spread.layers.map(l => {
           if (l.id !== layerId) return l;
@@ -286,6 +277,8 @@ export const AlbumCanvas: React.FC<AlbumCanvasProps> = ({
 
     const handleMouseMove = (e: MouseEvent) => {
       if (!containerRef.current) return;
+      
+      const currentSpread = spreadRef.current; // Use the most up-to-date spread from the ref.
 
       const rect = containerRef.current.getBoundingClientRect();
       const dxPx = dragStart.current ? e.clientX - dragStart.current.x : 0;
@@ -296,7 +289,7 @@ export const AlbumCanvas: React.FC<AlbumCanvasProps> = ({
       let newSnapLines = { x: null as number | null, y: null as number | null };
       let newGapGuides: GapGuide[] = [];
 
-      const updatedLayers = spread.layers.map(originalLayer => {
+      const updatedLayers = currentSpread.layers.map(originalLayer => {
           const initialState = initialLayersState.current.get(originalLayer.id);
           if (!initialState) return originalLayer; 
           
@@ -306,7 +299,7 @@ export const AlbumCanvas: React.FC<AlbumCanvasProps> = ({
             let newX = initialState.x + dxPct;
             let newY = initialState.y + dyPct;
 
-            if (selectedLayerIds.size === 1 && enableSmartGuides && !spread.isLocked) {
+            if (selectedLayerIds.size === 1 && enableSmartGuides && !currentSpread.isLocked) {
                 const candidatesX: { val: number, source: 'grid' | 'gap', gapStart?: number }[] = [];
                 const candidatesY: { val: number, source: 'grid' | 'gap', gapStart?: number }[] = [];
                 
@@ -319,7 +312,7 @@ export const AlbumCanvas: React.FC<AlbumCanvasProps> = ({
                     }
                 }
                 
-                spread.layers.forEach(other => {
+                currentSpread.layers.forEach(other => {
                       if (selectedLayerIds.has(other.id)) return;
                       gridTargetsX.push(other.x, other.x + other.width, other.x + other.width/2);
                       gridTargetsY.push(other.y, other.y + other.height, other.y + other.height/2);
@@ -328,7 +321,7 @@ export const AlbumCanvas: React.FC<AlbumCanvasProps> = ({
                 gridTargetsX.forEach(t => candidatesX.push({ val: t, source: 'grid' }));
                 gridTargetsY.forEach(t => candidatesY.push({ val: t, source: 'grid' }));
 
-                spread.layers.forEach(other => {
+                currentSpread.layers.forEach(other => {
                     if (selectedLayerIds.has(other.id)) return;
                     candidatesX.push({ val: other.x + other.width + gapPctX, source: 'gap', gapStart: other.x + other.width });
                     candidatesX.push({ val: other.x - gapPctX - newLayer.width, source: 'gap', gapStart: other.x - gapPctX });
@@ -373,11 +366,10 @@ export const AlbumCanvas: React.FC<AlbumCanvasProps> = ({
             newLayer.x = newX;
             newLayer.y = newY;
 
-          } else if (interactionMode === 'RESIZING' && activeHandle && selectedLayerIds.has(newLayer.id) && !spread.isLocked && !newLayer.isLocked) {
+          } else if (interactionMode === 'RESIZING' && activeHandle && selectedLayerIds.has(newLayer.id) && !currentSpread.isLocked && !newLayer.isLocked) {
              const oldBounds = groupBounds.current;
              
              if (oldBounds && oldBounds.w > 0 && oldBounds.h > 0) {
-                 // Group Resizing Logic
                  let newBoundsX = oldBounds.x;
                  let newBoundsY = oldBounds.y;
                  let newBoundsW = oldBounds.w;
@@ -397,7 +389,6 @@ export const AlbumCanvas: React.FC<AlbumCanvasProps> = ({
                      newBoundsH = potentialH;
                  }
                  
-                 // Proportional Scaling
                  const relX = (initialState.x - oldBounds.x) / oldBounds.w;
                  const relY = (initialState.y - oldBounds.y) / oldBounds.h;
                  const relW = initialState.width / oldBounds.w;
@@ -440,21 +431,11 @@ export const AlbumCanvas: React.FC<AlbumCanvasProps> = ({
               newLayer.rotation = angle;
 
           } else if (interactionMode === 'INTERNAL_EDIT' && selectedLayerIds.has(newLayer.id)) {
-              newLayer.adjustments.panX = initialState.adjustments.panX + dxPx;
-              newLayer.adjustments.panY = initialState.adjustments.panY + dyPx;
-
-          } else if (interactionMode === 'INTERNAL_SCALE' && selectedLayerIds.has(newLayer.id)) {
-               const sensitivity = 0.005;
-               let scaleChange = 0;
-               if (activeHandle?.includes('n')) scaleChange -= dyPx;
-               if (activeHandle?.includes('s')) scaleChange += dyPx;
-               if (activeHandle?.includes('w')) scaleChange -= dxPx;
-               if (activeHandle?.includes('e')) scaleChange += dxPx;
-               newLayer.adjustments.scale = Math.max(0.1, initialState.adjustments.scale + (scaleChange * sensitivity));
-              
-          } else if (interactionMode === 'INTERNAL_ROTATE' && selectedLayerIds.has(newLayer.id)) {
-              const sensitivity = 0.5;
-              newLayer.adjustments.rotation = (initialState.adjustments.rotation + (dxPx * sensitivity)) % 360;
+              newLayer.adjustments = {
+                  ...initialState.adjustments,
+                  panX: initialState.adjustments.panX + dxPx,
+                  panY: initialState.adjustments.panY + dyPx,
+              };
           }
           
           return newLayer;
@@ -462,7 +443,7 @@ export const AlbumCanvas: React.FC<AlbumCanvasProps> = ({
 
       setSnapLines(newSnapLines);
       setGapGuides(newGapGuides);
-      onUpdateLayers(spread.id, updatedLayers);
+      onUpdateLayers(currentSpread.id, updatedLayers);
     };
 
     const handleMouseUp = () => {
@@ -479,7 +460,7 @@ export const AlbumCanvas: React.FC<AlbumCanvasProps> = ({
     window.addEventListener('mousemove', handleMouseMove);
     window.addEventListener('mouseup', handleMouseUp);
     return () => { window.removeEventListener('mousemove', handleMouseMove); window.removeEventListener('mouseup', handleMouseUp); };
-  }, [interactionMode, activeHandle, spread.id, selectedLayerIds, aspectRatio, editingLayerId, photos, enableSmartGuides, gapPctX, gapPctY, showGrid, spread.isLocked]);
+  }, [interactionMode, activeHandle, spread.id, selectedLayerIds, aspectRatio, editingLayerId, photos, enableSmartGuides, gapPctX, gapPctY, showGrid, spread.isLocked, controlledSelectedLayerIdsFromProps]);
 
   const handleAlign = (alignment: string) => {
     if (selectedLayerIds.size === 0 || spread.isLocked) return;
@@ -542,7 +523,7 @@ export const AlbumCanvas: React.FC<AlbumCanvasProps> = ({
     <div 
       className={clsx(
         "relative w-full mb-12 transition-all duration-300 select-none group",
-        isActive ? "opacity-100 shadow-2xl ring-1 ring-gray-700" : "opacity-50 hover:opacity-80 scale-95 hover:scale-100 grayscale hover:grayscale-0",
+        isActive ? "opacity-100 shadow-2xl ring-1 ring-gray-700" : "opacity-100 scale-95 hover:scale-100", // Full opacity for inactive spreads
         spread.isLocked && "ring-1 ring-red-500/50"
       )}
       style={{ aspectRatio: `${aspectRatio}` }}
@@ -588,82 +569,6 @@ export const AlbumCanvas: React.FC<AlbumCanvasProps> = ({
                      </React.Fragment>
                  ))}
              </div>
-        )}
-
-        {isActive && selectedLayerIds.size > 0 && !editingLayerId && (
-          <div className="absolute -top-12 left-1/2 -translate-x-1/2 z-50 bg-gray-900/90 backdrop-blur border border-gray-700 p-1 rounded-lg flex items-center gap-1 shadow-xl">
-             {!spread.isLocked && (
-                 <>
-                    <div className="flex gap-0.5">
-                        <button onClick={() => handleAlign('left')} className="p-1.5 hover:bg-gray-700 rounded text-gray-300" title="Alinhar à Esquerda"><AlignLeft size={16} /></button>
-                        <button onClick={() => handleAlign('center-x')} className="p-1.5 hover:bg-gray-700 rounded text-gray-300" title="Centralizar Horizontalmente"><AlignCenter size={16} /></button>
-                        <button onClick={() => handleAlign('right')} className="p-1.5 hover:bg-gray-700 rounded text-gray-300" title="Alinhar à Direita"><AlignRight size={16} /></button>
-                    </div>
-                    
-                    <div className="w-px h-4 bg-gray-600 mx-1"></div>
-                    
-                    <div className="flex gap-0.5">
-                        <button onClick={() => handleAlign('top')} className="p-1.5 hover:bg-gray-700 rounded text-gray-300" title="Alinhar ao Topo"><ArrowUpToLine size={16} /></button>
-                        <button onClick={() => handleAlign('center-y')} className="p-1.5 hover:bg-gray-700 rounded text-gray-300" title="Centralizar Verticalmente"><FoldVertical size={16} /></button>
-                        <button onClick={() => handleAlign('bottom')} className="p-1.5 hover:bg-gray-700 rounded text-gray-300" title="Alinhar à Base"><ArrowDownToLine size={16} /></button>
-                    </div>
-
-                    <div className="w-px h-4 bg-gray-600 mx-1"></div>
-                 </>
-             )}
-             
-             {selectedLayerIds.size === 1 && (
-                 <>
-                    {/* Single Layer Lock Button */}
-                    <button 
-                        onClick={(e) => {
-                            const l = spread.layers.find(ly => ly.id === Array.from(selectedLayerIds)[0]);
-                            if(l) handleToggleLayerLock(e, l);
-                        }} 
-                        className={clsx(
-                            "p-1.5 rounded transition-colors", 
-                            spread.layers.find(ly => ly.id === Array.from(selectedLayerIds)[0])?.isLocked ? "bg-red-500/80 text-white" : "hover:bg-gray-700 text-gray-300"
-                        )} 
-                        title="Bloquear/Desbloquear Camada"
-                    >
-                         {spread.layers.find(ly => ly.id === Array.from(selectedLayerIds)[0])?.isLocked ? <Lock size={16} /> : <Unlock size={16} />}
-                    </button>
-                    <div className="w-px h-4 bg-gray-600 mx-1"></div>
-                 </>
-             )}
-
-             <button onClick={() => handleLayerOrder('front')} className="p-1.5 hover:bg-gray-700 rounded text-gray-300" title="Trazer para Frente"><BringToFront size={16} /></button>
-             <button onClick={() => handleLayerOrder('back')} className="p-1.5 hover:bg-gray-700 rounded text-gray-300" title="Enviar para Trás"><SendToBack size={16} /></button>
-             <div className="w-px h-4 bg-gray-600 mx-1"></div>
-             <button 
-                onClick={() => setEnableSmartGuides(!enableSmartGuides)} 
-                className={clsx("p-1.5 rounded transition-colors", enableSmartGuides ? "bg-purple-600 text-white" : "hover:bg-gray-700 text-gray-300")} 
-                title="Guias Inteligentes (Snap)"
-             >
-                 <Magnet size={16} />
-             </button>
-             <button 
-                onClick={() => setShowGrid(!showGrid)} 
-                className={clsx("p-1.5 rounded transition-colors", showGrid ? "bg-blue-600 text-white" : "hover:bg-gray-700 text-gray-300")} 
-                title="Mostrar Grade (5%)"
-             >
-                 <GridIcon size={16} />
-             </button>
-             <div className="w-px h-4 bg-gray-600 mx-1"></div>
-             
-             {onRedistribute && !spread.isLocked && (
-                <button 
-                    onClick={() => onRedistribute()} 
-                    className="p-1.5 hover:bg-blue-600 text-blue-400 hover:text-white rounded transition-colors"
-                    title="Otimizar Redistribuição (Smart Fit)"
-                >
-                    <Wand2 size={16} />
-                </button>
-             )}
-             
-             <div className="w-px h-4 bg-gray-600 mx-1"></div>
-             <button onClick={() => onDeleteLayers(spread.id, Array.from(selectedLayerIds))} className="p-1.5 hover:bg-red-900/50 text-red-400 rounded" title="Excluir"><Trash size={16} /></button>
-          </div>
         )}
 
         {/* Snap Lines */}
@@ -728,7 +633,6 @@ export const AlbumCanvas: React.FC<AlbumCanvasProps> = ({
               onContextMenu={(e) => handleContextMenu(e, layer)}
               onMouseDown={(e) => handleLayerMouseDown(e, layer)}
               onDoubleClick={(e) => handleLayerDoubleClick(e, layer)}
-              onWheel={(e) => handleWheel(e, layer)}
             >
               <div className={clsx(
                 "w-full h-full overflow-hidden bg-gray-100 relative select-none flex items-center justify-center",
@@ -765,37 +669,6 @@ export const AlbumCanvas: React.FC<AlbumCanvasProps> = ({
                              <Lock size={10} />
                          </div>
                      </div>
-                 )}
-
-                 {(isSelected || isEditing) && !photo.isMissing && (
-                     <div className="absolute inset-0 pointer-events-none opacity-40">
-                         <div className="absolute left-1/3 w-px h-full bg-white/50 shadow-sm" />
-                         <div className="absolute right-1/3 w-px h-full bg-white/50 shadow-sm" />
-                         <div className="absolute top-1/3 h-px w-full bg-white/50 shadow-sm" />
-                         <div className="absolute bottom-1/3 h-px w-full bg-white/50 shadow-sm" />
-                     </div>
-                 )}
-                 
-                 {isEditing && (
-                     <>
-                        <div className="absolute top-1 left-1 w-3 h-3 bg-emerald-500 border border-white rounded-full cursor-nwse-resize z-50 pointer-events-auto" onMouseDown={(e) => handleContentResizeStart(e, 'nw', layer)} />
-                        <div className="absolute top-1 right-1 w-3 h-3 bg-emerald-500 border border-white rounded-full cursor-nesw-resize z-50 pointer-events-auto" onMouseDown={(e) => handleContentResizeStart(e, 'ne', layer)} />
-                        <div className="absolute bottom-1 left-1 w-3 h-3 bg-emerald-500 border border-white rounded-full cursor-nesw-resize z-50 pointer-events-auto" onMouseDown={(e) => handleContentResizeStart(e, 'sw', layer)} />
-                        <div className="absolute bottom-1 right-1 w-3 h-3 bg-emerald-500 border border-white rounded-full cursor-nwse-resize z-50 pointer-events-auto" onMouseDown={(e) => handleContentResizeStart(e, 'se', layer)} />
-                        <div className="absolute bottom-4 left-1/2 -translate-x-1/2 flex flex-col items-center gap-2 z-50 pointer-events-auto">
-                            <div className="flex items-center gap-2 bg-black/80 backdrop-blur rounded-full px-3 py-1.5 shadow-xl border border-gray-700">
-                                <ZoomIn size={14} className="text-gray-400" />
-                                <span className="text-[10px] text-gray-300 font-mono w-8 text-center">{Math.round(adj.scale * 100)}%</span>
-                                <div className="w-px h-3 bg-gray-600 mx-1" />
-                                <button onMouseDown={(e) => { e.stopPropagation(); updateContentRotation(layer.id, -90); }} className="text-white hover:text-blue-400" title="-90°">
-                                    <RotateCw size={14} className="-scale-x-100" />
-                                </button>
-                                <button onMouseDown={(e) => { e.stopPropagation(); updateContentRotation(layer.id, 90); }} className="text-white hover:text-blue-400" title="+90°">
-                                    <RotateCw size={14} />
-                                </button>
-                            </div>
-                        </div>
-                     </>
                  )}
               </div>
 
@@ -836,47 +709,73 @@ export const AlbumCanvas: React.FC<AlbumCanvasProps> = ({
       <div className="absolute -top-8 left-0 flex items-center gap-3">
          <span className="text-[10px] font-bold text-gray-500 bg-gray-800 px-2 py-0.5 rounded uppercase tracking-wider">Lâmina {spread.index}</span>
       </div>
-
+      
+      {/* NEW BOTTOM TOOLBAR */}
       {isActive && (
-          <div className="absolute top-4 right-4 flex flex-col gap-2 z-40 opacity-0 group-hover:opacity-100 transition-opacity duration-200">
-             {onToggleLock && (
-                 <button onClick={(e) => { e.stopPropagation(); onToggleLock(); }} className={clsx("flex items-center gap-2 px-3 py-2 backdrop-blur border rounded-md text-xs font-medium shadow-lg transition-all", spread.isLocked ? "bg-red-500/90 hover:bg-red-600 border-red-400 text-white" : "bg-gray-900/90 hover:bg-gray-700 border-gray-700 text-gray-200")} title={spread.isLocked ? "Desbloquear Layout" : "Bloquear Layout"}>
-                     {spread.isLocked ? <Lock size={14} /> : <Unlock size={14} />}
-                 </button>
-             )}
-             <div className="h-px w-full bg-gray-600 my-1"></div>
+        <div className="absolute -bottom-14 left-0 right-0 flex items-center justify-between px-4 opacity-0 group-hover:opacity-100 transition-opacity duration-300 pointer-events-none z-50">
+          {/* Left: Layer Actions */}
+          <div className={clsx("flex items-center gap-1 bg-gray-900/90 backdrop-blur border border-gray-700 p-1 rounded-lg shadow-xl pointer-events-auto", selectedLayerIds.size === 0 && "opacity-30")}>
+            <div className="flex gap-0.5">
+                <button onClick={() => handleAlign('left')} className="p-1.5 hover:bg-gray-700 rounded text-gray-300" title="Alinhar à Esquerda"><AlignLeft size={16} /></button>
+                <button onClick={() => handleAlign('center-x')} className="p-1.5 hover:bg-gray-700 rounded text-gray-300" title="Centralizar Horizontalmente"><AlignCenter size={16} /></button>
+                <button onClick={() => handleAlign('right')} className="p-1.5 hover:bg-gray-700 rounded text-gray-300" title="Alinhar à Direita"><AlignRight size={16} /></button>
+            </div>
+            <div className="w-px h-4 bg-gray-600 mx-1"></div>
+            <div className="flex gap-0.5">
+                <button onClick={() => handleAlign('top')} className="p-1.5 hover:bg-gray-700 rounded text-gray-300" title="Alinhar ao Topo"><ArrowUpToLine size={16} /></button>
+                <button onClick={() => handleAlign('center-y')} className="p-1.5 hover:bg-gray-700 rounded text-gray-300" title="Centralizar Verticalmente"><FoldVertical size={16} /></button>
+                <button onClick={() => handleAlign('bottom')} className="p-1.5 hover:bg-gray-700 rounded text-gray-300" title="Alinhar à Base"><ArrowDownToLine size={16} /></button>
+            </div>
+            <div className="w-px h-4 bg-gray-600 mx-1"></div>
+            <button onClick={() => handleLayerOrder('front')} className="p-1.5 hover:bg-gray-700 rounded text-gray-300" title="Trazer para Frente"><BringToFront size={16} /></button>
+            <button onClick={() => handleLayerOrder('back')} className="p-1.5 hover:bg-gray-700 rounded text-gray-300" title="Enviar para Trás"><SendToBack size={16} /></button>
+            <div className="w-px h-4 bg-gray-600 mx-1"></div>
+            {selectedLayerIds.size === 1 && (
+                <button 
+                    onClick={(e) => {
+                        const l = spread.layers.find(ly => ly.id === Array.from(selectedLayerIds)[0]);
+                        if(l) handleToggleLayerLock(e, l);
+                    }} 
+                    className={clsx("p-1.5 rounded transition-colors", spread.layers.find(ly => ly.id === Array.from(selectedLayerIds)[0])?.isLocked ? "bg-red-500/80 text-white" : "hover:bg-gray-700 text-gray-300")} 
+                    title="Bloquear/Desbloquear Foto"
+                >
+                     {spread.layers.find(ly => ly.id === Array.from(selectedLayerIds)[0])?.isLocked ? <Lock size={16} /> : <Unlock size={16} />}
+                </button>
+            )}
+            <button onClick={() => onDeleteLayers(spread.id, Array.from(selectedLayerIds))} className="p-1.5 bg-red-900/50 hover:bg-red-900/80 text-red-400 rounded transition-colors" title="Excluir Foto(s)"><Trash size={16} /></button>
+          </div>
+
+          {/* Right: Spread Actions */}
+          <div className="flex items-center gap-2 bg-gray-900/90 backdrop-blur border border-gray-700 p-1 rounded-lg shadow-xl pointer-events-auto">
+            {onToggleLock && (
+                <button onClick={(e) => { e.stopPropagation(); onToggleLock(); }} className={clsx("p-2 rounded transition-colors", spread.isLocked ? "bg-red-500/80 text-white" : "hover:bg-gray-700 text-gray-300")} title={spread.isLocked ? "Desbloquear Lâmina" : "Bloquear Lâmina"}>
+                    {spread.isLocked ? <Lock size={16} /> : <Unlock size={16} />}
+                </button>
+            )}
+             <div className="w-px h-4 bg-gray-600"></div>
              {onRedistribute && !spread.isLocked && (
-                <button onClick={(e) => { e.stopPropagation(); onRedistribute(); }} className="flex items-center gap-2 px-3 py-2 bg-gray-900/90 hover:bg-blue-600 backdrop-blur border border-gray-700 rounded-md text-xs font-medium text-gray-200 shadow-lg transition-all" title="Otimizar / Variar Layout">
-                    <Wand2 size={14} className="text-blue-400 group-hover:text-white" />
-                    <span className="hidden sm:inline">Otimizar</span>
+                <button onClick={(e) => { e.stopPropagation(); onRedistribute(); }} className="flex items-center gap-2 px-3 py-1.5 bg-blue-600 hover:bg-blue-500 rounded text-xs font-bold text-white transition-all" title="Otimizar / Variar Layout da Lâmina">
+                    <Wand2 size={14} /> Otimizar
                 </button>
              )}
              {onDistributeFromHere && !spread.isLocked && (
-                 <button onClick={(e) => { e.stopPropagation(); onDistributeFromHere(); }} className="flex items-center gap-2 px-3 py-2 bg-gray-900/90 hover:bg-purple-600 backdrop-blur border border-gray-700 rounded-md text-xs font-medium text-gray-200 shadow-lg transition-all" title="Variar e distribuir fotos desta lâmina em diante">
-                     <ListRestart size={14} className="text-purple-400 group-hover:text-white" />
-                     <span className="hidden sm:inline">Variar Daqui</span>
+                 <button onClick={(e) => { e.stopPropagation(); onDistributeFromHere(); }} className="flex items-center gap-2 px-3 py-1.5 bg-purple-600 hover:bg-purple-500 rounded text-xs font-bold text-white transition-all" title="Variar e distribuir fotos desta lâmina em diante">
+                     <Shuffle size={14} /> Variar Daqui
                  </button>
              )}
              {onShowTemplates && (
-                <button onClick={(e) => { e.stopPropagation(); onShowTemplates(); }} className="flex items-center gap-2 px-3 py-2 bg-gray-900/90 hover:bg-blue-600 backdrop-blur border border-gray-700 rounded-md text-xs font-medium text-gray-200 shadow-lg transition-all" title="Templates">
-                    <Layout size={14} className="text-blue-400 group-hover:text-white" />
-                    <span className="hidden sm:inline">Templates</span>
+                <button onClick={(e) => { e.stopPropagation(); onShowTemplates(); }} className="flex items-center gap-2 px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 rounded text-xs font-bold text-white transition-all" title="Ver Templates de Layout">
+                    <Layout size={14} /> Templates
                 </button>
              )}
           </div>
+        </div>
       )}
-      
+
       {editingLayerId && (
           <div className="absolute top-4 left-1/2 -translate-x-1/2 z-50 bg-emerald-600 text-white px-4 py-1.5 rounded-full text-xs font-bold shadow-xl flex items-center gap-2 animate-pulse border border-emerald-400 pointer-events-none">
               <Maximize2 size={14} /> Editando Conteúdo (Esc para sair)
           </div>
-      )}
-      {spread.isLocked && (
-           <div className="absolute bottom-4 right-4 pointer-events-none opacity-50">
-               <div className="bg-red-500 text-white text-[10px] px-2 py-1 rounded font-bold uppercase tracking-wider flex items-center gap-1">
-                   <Lock size={10} /> Layout Bloqueado
-               </div>
-           </div>
       )}
       
       {contextMenu.visible && contextMenu.layerId && (
@@ -921,15 +820,6 @@ export const AlbumCanvas: React.FC<AlbumCanvasProps> = ({
                   className="w-full text-left px-4 py-2 hover:bg-gray-700 flex items-center gap-2 text-sm"
               >
                   <RotateCw size={14} /> Rotacionar +90°
-              </button>
-              <button 
-                   onClick={() => {
-                      if (contextMenu.layerId) updateContentRotation(contextMenu.layerId, -90);
-                      setContextMenu({ ...contextMenu, visible: false });
-                  }}
-                  className="w-full text-left px-4 py-2 hover:bg-gray-700 flex items-center gap-2 text-sm"
-              >
-                  <RotateCw size={14} className="-scale-x-100" /> Rotacionar -90°
               </button>
 
               <div className="h-px bg-gray-700 my-1"></div>

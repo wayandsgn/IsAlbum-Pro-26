@@ -1,5 +1,4 @@
 
-
 import React, { useState, useEffect, useRef } from 'react';
 import { PhotoSidebar } from './components/PhotoSidebar';
 import { Toolbar } from './components/Toolbar';
@@ -8,6 +7,7 @@ import { WelcomeScreen } from './components/WelcomeScreen';
 import { PropertiesPanel } from './components/PropertiesPanel';
 import { BookPreviewModal } from './components/BookPreviewModal';
 import { ExportModal } from './components/ExportModal';
+import { SingleSpreadEditor } from './components/SingleSpreadEditor';
 import { Photo, Spread, AlbumConfig, Layer, SavedProject, ElectronAPI, PhotoMetadata, LoadedImage, RelinkedFile } from './types';
 import { distributePhotosToSpreads, generateAlternativeLayouts, generateNoCropRowLayout, distributePhotosFromIndex, generateSmartMosaicLayout, generateUniqueVariations, getLayoutHash, generateStructuredLayout } from './utils/layoutGenerator';
 import { exportSpreadToPSD, exportSpreadToJPG, exportSpreadToPDF, exportMultipleSpreadsToPDF } from './services/exportService';
@@ -45,6 +45,7 @@ const App: React.FC = () => {
   
   const [activeSpreadId, setActiveSpreadId] = useState<string | null>(null);
   const [selectedLayerId, setSelectedLayerId] = useState<string | null>(null);
+  const [editingSpreadId, setEditingSpreadId] = useState<string | null>(null);
 
   const [isExporting, setIsExporting] = useState(false);
   const [showPreview, setShowPreview] = useState(false);
@@ -351,6 +352,9 @@ const App: React.FC = () => {
       const nextVar = (distributionVariation + 1) % 15; 
       setDistributionVariation(nextVar);
       
+      // Save current active spread index to restore selection after redistribution
+      const currentActiveIndex = spreads.findIndex(s => s.id === activeSpreadId);
+      
       const lockedSpreadIds = new Set(spreads.filter(s => s.isLocked).map(s => s.id));
       const photosInLockedSpreads = new Set<string>();
       spreads.filter(s => s.isLocked).forEach(s => s.layers.forEach(l => photosInLockedSpreads.add(l.photoId)));
@@ -385,7 +389,15 @@ const App: React.FC = () => {
       
       setTotalSpreads(finalSpreads.length);
       saveToHistory(finalSpreads);
-      if (finalSpreads.length > 0) setActiveSpreadId(finalSpreads[0].id);
+
+      // Restore active spread selection based on index
+      if (finalSpreads.length > 0) {
+          if (currentActiveIndex >= 0 && finalSpreads[currentActiveIndex]) {
+              setActiveSpreadId(finalSpreads[currentActiveIndex].id);
+          } else {
+              setActiveSpreadId(finalSpreads[0].id);
+          }
+      }
   };
   
   const handleDistributeFromSpread = (spreadId: string) => {
@@ -485,52 +497,66 @@ const App: React.FC = () => {
   };
 
   const handleRedistributeSpread = (spreadId: string) => {
-      updateSpreadsWithHistory(prev => prev.map(s => {
-          if (s.id !== spreadId) return s;
-          if (s.isLocked) return s; 
+    updateSpreadsWithHistory(prev => prev.map(s => {
+        if (s.id !== spreadId) return s;
+        if (s.isLocked) return s;
 
-          const lockedLayers = s.layers.filter(l => l.isLocked);
-          const unlockedLayers = s.layers.filter(l => !l.isLocked);
-          
-          const photosToRedistribute = unlockedLayers
-             .map(l => photos.find(p => p.id === l.photoId))
-             .filter((p): p is Photo => !!p);
+        const lockedLayers = s.layers.filter(l => l.isLocked);
+        const unlockedLayers = s.layers.filter(l => !l.isLocked);
 
-          if (photosToRedistribute.length === 0) return s;
-          
-          if (lockedLayers.length === 0) {
-              const newLayers = (distributionVariation % 2 === 0) 
-                  ? generateStructuredLayout(photosToRedistribute, config)
-                  : generateSmartMosaicLayout(photosToRedistribute, config, true);
-              return { ...s, layers: newLayers };
-          }
+        const photosToRedistribute = unlockedLayers
+           .map(l => photos.find(p => p.id === l.photoId))
+           .filter((p): p is Photo => !!p);
 
-          let minX = 100, minY = 100, maxX = 0, maxY = 0;
-          unlockedLayers.forEach(l => {
-              minX = Math.min(minX, l.x);
-              minY = Math.min(minY, l.y);
-              maxX = Math.max(maxX, l.x + l.width);
-              maxY = Math.max(maxY, l.y + l.height);
-          });
-          
-          if (minX >= maxX || minY >= maxY) {
-              return s;
-          }
-          
-          const region = {
-              x: minX,
-              y: minY,
-              width: maxX - minX,
-              height: maxY - minY
-          };
+        if (photosToRedistribute.length === 0) return s;
 
-          const newUnlockedLayers = generateStructuredLayout(photosToRedistribute, config, region);
-          
-          return { ...s, layers: [...lockedLayers, ...newUnlockedLayers] };
-      }));
-      
-      setDistributionVariation(prev => prev + 1);
+        if (lockedLayers.length === 0) {
+            const newLayers = (distributionVariation % 2 === 0) 
+                ? generateStructuredLayout(photosToRedistribute, config)
+                : generateSmartMosaicLayout(photosToRedistribute, config, true);
+            return { ...s, layers: newLayers };
+        }
+
+        // --- NEW LOGIC FOR HANDLING LOCKED LAYERS (v2.0) ---
+        let lockedMinX = Infinity, lockedMinY = Infinity, lockedMaxX = -Infinity, lockedMaxY = -Infinity;
+        lockedLayers.forEach(l => {
+            lockedMinX = Math.min(lockedMinX, l.x);
+            lockedMinY = Math.min(lockedMinY, l.y);
+            lockedMaxX = Math.max(lockedMaxX, l.x + l.width);
+            lockedMaxY = Math.max(lockedMaxY, l.y + l.height);
+        });
+
+        const marginX = (config.margin / config.spreadWidth) * 100;
+        const marginY = (config.margin / config.spreadHeight) * 100;
+        const pageArea = { x: marginX, y: marginY, width: 100 - 2 * marginX, height: 100 - 2 * marginY };
+
+        const potentialRegions = [
+            { name: 'top', x: pageArea.x, y: pageArea.y, width: pageArea.width, height: lockedMinY - pageArea.y },
+            { name: 'bottom', x: pageArea.x, y: lockedMaxY, width: pageArea.width, height: (pageArea.y + pageArea.height) - lockedMaxY },
+            { name: 'left', x: pageArea.x, y: pageArea.y, width: lockedMinX - pageArea.x, height: pageArea.height },
+            { name: 'right', x: lockedMaxX, y: pageArea.y, width: (pageArea.x + pageArea.width) - lockedMaxX, height: pageArea.height },
+        ]
+        .filter(r => r.width > 5 && r.height > 5)
+        .map(r => ({ ...r, area: r.width * r.height }));
+
+        potentialRegions.sort((a, b) => b.area - a.area);
+        const targetRegion = potentialRegions.length > 0 ? potentialRegions[0] : null;
+
+        if (!targetRegion) {
+            return s; 
+        }
+
+        const useMosaic = Math.random() > 0.4; // 60% chance for mosaic
+        const newUnlockedLayers = useMosaic
+            ? generateSmartMosaicLayout(photosToRedistribute, config, true, undefined, targetRegion)
+            : generateStructuredLayout(photosToRedistribute, config, targetRegion);
+        
+        return { ...s, layers: [...lockedLayers, ...newUnlockedLayers] };
+    }));
+    
+    setDistributionVariation(prev => prev + 1);
   };
+
 
   const handlePhotoDrop = (spreadId: string, photoId: string, x: number, y: number, targetLayerId?: string, modifiers?: { ctrlKey: boolean }) => {
     updateSpreadsWithHistory(prev => {
@@ -739,6 +765,8 @@ const App: React.FC = () => {
     );
   }
 
+  const currentEditingSpread = spreads.find(s => s.id === editingSpreadId);
+
   return (
     <div className="flex flex-col h-screen bg-gray-950 text-white relative">
       <Toolbar 
@@ -760,8 +788,9 @@ const App: React.FC = () => {
         canUndo={historyIndex.current > 0}
         canRedo={historyIndex.current < history.length - 1}
         onResizeProject={handleResizeProject}
-        onUpdateGap={handleUpdateGap}
         onReturnToWelcome={handleReturnToWelcome}
+        onEditSpread={() => activeSpreadId && setEditingSpreadId(activeSpreadId)}
+        canEditSpread={!!activeSpreadId}
       />
 
       <div className="flex flex-1 overflow-hidden">
@@ -790,7 +819,7 @@ const App: React.FC = () => {
                             photos={photos}
                             config={config}
                             isActive={spread.id === activeSpreadId}
-                            selectedLayerIds={selectedLayerId && spread.id === activeSpreadId ? new Set([selectedLayerId]) : undefined}
+                            selectedLayerIds={selectedLayerId && spread.id === activeSpreadId ? new Set([selectedLayerId]) : new Set()}
                             onSelectionChange={(ids) => {
                                 if (ids.size > 0) { setActiveSpreadId(spread.id); setSelectedLayerId(Array.from(ids)[0]); } 
                                 else { if (activeSpreadId === spread.id) setSelectedLayerId(null); }
@@ -840,6 +869,26 @@ const App: React.FC = () => {
               config={config} 
               onClose={() => setShowPreview(false)} 
           />
+      )}
+
+      {currentEditingSpread && (
+          <div className="absolute inset-0 z-40">
+              <SingleSpreadEditor
+                  spread={currentEditingSpread}
+                  photos={photos}
+                  config={config}
+                  onBack={() => setEditingSpreadId(null)}
+                  onUpdateLayer={(spreadId, layer) => {
+                      updateSpreadsWithHistory(prev => prev.map(s => {
+                          if (s.id !== spreadId) return s;
+                          return { ...s, layers: s.layers.map(l => l.id === layer.id ? layer : l) };
+                      }));
+                  }}
+                  onUpdateLayers={handleUpdateLayers}
+                  selectedLayerId={selectedLayerId}
+                  onSelectLayer={setSelectedLayerId}
+              />
+          </div>
       )}
 
       {showTemplateModal && (

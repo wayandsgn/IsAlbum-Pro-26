@@ -1,5 +1,7 @@
-/// <reference types="node" />
-// FIX: The triple-slash reference directive must be the very first thing in the file to be recognized by the TypeScript compiler. This change ensures Node.js types are loaded, resolving errors for `__dirname` and `process.platform`.
+
+// Fix: Manually declare Node.js globals to resolve TypeScript errors when type definitions are missing.
+declare const __dirname: string;
+declare const process: { platform: string; };
 
 import { app, BrowserWindow, ipcMain, dialog } from 'electron';
 import path from 'path';

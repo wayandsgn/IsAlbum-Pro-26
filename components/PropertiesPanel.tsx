@@ -37,7 +37,6 @@ export const PropertiesPanel: React.FC<PropertiesPanelProps> = ({ selectedLayer,
   const selectedPhoto = photos.find(p => p.id === selectedLayer.photoId);
 
   const handleUpdate = (updates: Partial<ImageAdjustments>) => {
-      // Direct update without aggressive clamping to avoid fighting with rotation logic
       const nextAdjustments = { ...selectedLayer.adjustments, ...updates };
       onUpdateLayer({ ...selectedLayer, adjustments: nextAdjustments });
   };
@@ -84,7 +83,6 @@ export const PropertiesPanel: React.FC<PropertiesPanelProps> = ({ selectedLayer,
                   shadows: adjustments.shadows,
                   blacks: adjustments.blacks,
                   temperature: adjustments.temperature
-                  // Do not paste Transform/Crop settings as they are geometry specific
               });
           } catch (e) { console.error("Failed to paste settings", e); }
       }
@@ -118,7 +116,6 @@ export const PropertiesPanel: React.FC<PropertiesPanelProps> = ({ selectedLayer,
 
       <div className="flex-1 overflow-y-auto custom-scrollbar p-4 space-y-6">
           
-          {/* Crop / Preview Box */}
           {selectedPhoto && config && (
               <CropPreview 
                   photo={selectedPhoto} 
@@ -128,7 +125,6 @@ export const PropertiesPanel: React.FC<PropertiesPanelProps> = ({ selectedLayer,
               />
           )}
 
-          {/* Group: Content Transform */}
           <div className="space-y-3">
               <GroupHeader icon={Maximize} title="Enquadramento" />
               <div className="bg-[#1A1D23] rounded-lg p-3 space-y-4 border border-gray-800">
@@ -150,13 +146,12 @@ export const PropertiesPanel: React.FC<PropertiesPanelProps> = ({ selectedLayer,
                       formatValue={(v) => `${Math.round(v)}°`}
                   />
                   <div className="grid grid-cols-2 gap-3 pt-1">
-                      <ProSlider label="X" compact value={selectedLayer.adjustments.panX} min={-1000} max={1000} defaultValue={0} bipolar onChange={(v) => handleChange('panX', v)} />
-                      <ProSlider label="Y" compact value={selectedLayer.adjustments.panY} min={-1000} max={1000} defaultValue={0} bipolar onChange={(v) => handleChange('panY', v)} />
+                      <ProSlider label="X" compact value={selectedLayer.adjustments.panX} min={-500} max={500} defaultValue={0} bipolar onChange={(v) => handleChange('panX', v)} />
+                      <ProSlider label="Y" compact value={selectedLayer.adjustments.panY} min={-500} max={500} defaultValue={0} bipolar onChange={(v) => handleChange('panY', v)} />
                   </div>
               </div>
           </div>
 
-          {/* Group: Light & Color */}
           <div className="space-y-3">
               <div className="flex items-center justify-between">
                  <GroupHeader icon={Sun} title="Luz & Cor" />
@@ -192,52 +187,51 @@ const CropPreview: React.FC<{
     config: AlbumConfig,
     onChange: (panX: number, panY: number) => void
 }> = ({ photo, layer, config, onChange }) => {
-    const startRef = useRef<{x: number, y: number, startPanX: number, startPanY: number} | null>(null);
+    const startRef = useRef<{x: number, y: number, startPanX: number, startPanY: number, startScale: number} | null>(null);
     
-    // Calculate aspect ratios and base dims
     const frameW = (layer.width / 100) * config.spreadWidth;
     const frameH = (layer.height / 100) * config.spreadHeight;
     const frameAR = frameW / frameH;
     const photoAR = photo.aspectRatio;
 
-    // Sidebar Viewport Logic
-    const maxDisplayWidth = 220; // Decreased slightly to ensure fitting with margins
+    const maxDisplayWidth = 220; 
     const maxDisplayHeight = 220;
 
-    // Calculate display dimensions keeping AR, fitting within the box
     let displayWidth = maxDisplayWidth;
     let displayHeight = displayWidth / frameAR;
-
     if (displayHeight > maxDisplayHeight) {
         displayHeight = maxDisplayHeight;
         displayWidth = displayHeight * frameAR;
     }
 
     const displayScale = displayWidth / frameW;
-
-    // Calculate dimensions of the inner photo at scale=1 (Cover Logic)
-    let baseImgW, baseImgH;
-    if (photoAR > frameAR) { baseImgH = frameH; baseImgW = frameH * photoAR; } 
-    else { baseImgW = frameW; baseImgH = frameW / photoAR; }
-
-    // Dimensions at current zoom
-    const renderImgW = baseImgW * layer.adjustments.scale * displayScale;
-    const renderImgH = baseImgH * layer.adjustments.scale * displayScale;
+    const adj = layer.adjustments;
+    const isWide = photoAR > frameAR;
     
-    // Current Pan (scaled to UI)
-    const renderPanX = layer.adjustments.panX * displayScale;
-    const renderPanY = layer.adjustments.panY * displayScale;
+    const renderPanX = adj.panX * displayScale;
+    const renderPanY = adj.panY * displayScale;
 
-    // UI Container Dims (Adding padding visual only, not affecting calculation)
-    const containerPadding = 20;
+    const imageStyle: React.CSSProperties = {
+        position: 'absolute',
+        width: isWide ? 'auto' : '100%',
+        height: isWide ? '100%' : 'auto',
+        maxWidth: 'none',
+        maxHeight: 'none',
+        top: '50%',
+        left: '50%',
+        transformOrigin: 'center',
+        transform: `translate(-50%, -50%) scale(${adj.scale}) translate(${renderPanX}px, ${renderPanY}px) rotate(${adj.rotation}deg)`,
+        filter: `brightness(${100 + adj.brightness}%) contrast(${100 + adj.contrast}%) saturate(${100 + adj.saturation}%) hue-rotate(${adj.temperature}deg)`
+    };
 
     const handleMouseDown = (e: React.MouseEvent) => {
         e.preventDefault();
         startRef.current = {
             x: e.clientX,
             y: e.clientY,
-            startPanX: layer.adjustments.panX,
-            startPanY: layer.adjustments.panY
+            startPanX: adj.panX,
+            startPanY: adj.panY,
+            startScale: adj.scale
         };
         
         const handleMouseMove = (ev: MouseEvent) => {
@@ -245,17 +239,16 @@ const CropPreview: React.FC<{
             const dx = ev.clientX - startRef.current.x;
             const dy = ev.clientY - startRef.current.y;
             
-            // Adjust vector for rotation
-            const rad = (layer.adjustments.rotation * Math.PI) / 180;
+            const rad = (adj.rotation * Math.PI) / 180;
             const cos = Math.cos(-rad);
             const sin = Math.sin(-rad);
             
             const rDx = dx * cos - dy * sin;
             const rDy = dx * sin + dy * cos;
 
-            // Map back to spread pixels
-            const deltaPanX = rDx / displayScale;
-            const deltaPanY = rDy / displayScale;
+            const currentScale = startRef.current.startScale || 1;
+            const deltaPanX = rDx / (displayScale * currentScale);
+            const deltaPanY = rDy / (displayScale * currentScale);
             
             onChange(startRef.current.startPanX + deltaPanX, startRef.current.startPanY + deltaPanY);
         };
@@ -276,63 +269,34 @@ const CropPreview: React.FC<{
                 <Crop size={12} className="text-blue-500" /> Visualização e Corte
             </h3>
             
-            {/* Main Flex Container for Centering */}
             <div 
-                className="w-full bg-[#0a0a0a] border border-gray-800 rounded-md relative cursor-move group overflow-hidden flex items-center justify-center"
-                style={{ height: maxDisplayHeight + (containerPadding * 2) }}
-                onMouseDown={handleMouseDown}
+                className="w-full bg-[#0a0a0a] border border-gray-800 rounded-md p-2 flex items-center justify-center"
+                style={{ height: maxDisplayHeight }}
             >
-                {/* Reference Center Lines for the Container */}
-                <div className="absolute w-full h-px bg-gray-800/50 pointer-events-none" />
-                <div className="absolute h-full w-px bg-gray-800/50 pointer-events-none" />
+                <div 
+                    className="relative" 
+                    style={{ width: displayWidth, height: displayHeight }}
+                >
+                    <img 
+                      src={photo.previewUrl} 
+                      draggable={false} 
+                      className="absolute pointer-events-none" 
+                      style={{ ...imageStyle, opacity: 0.15, filter: 'grayscale(100%)' }} 
+                    />
 
-                {/* The Visible Frame Wrapper */}
-                <div className="relative" style={{ width: displayWidth, height: displayHeight }}>
-                    
-                    {/* 1. Ghost Image (Outside Frame) - Low Opacity */}
-                    <div className="absolute top-1/2 left-1/2 flex items-center justify-center pointer-events-none overflow-visible"
-                        style={{ 
-                            width: renderImgW, 
-                            height: renderImgH,
-                            transform: `translate(-50%, -50%) translate(${renderPanX}px, ${renderPanY}px) rotate(${layer.adjustments.rotation}deg)` 
-                        }}
+                    <div 
+                      className="absolute inset-0 overflow-hidden cursor-move"
+                      onMouseDown={handleMouseDown}
                     >
-                        <img 
-                            src={photo.previewUrl} 
-                            style={{ width: '100%', height: '100%', objectFit: 'cover', opacity: 0.15, filter: 'grayscale(100%)' }}
-                            draggable={false}
-                            alt=""
-                        />
+                      <img 
+                        src={photo.previewUrl} 
+                        draggable={false} 
+                        className="absolute pointer-events-none" 
+                        style={imageStyle} 
+                      />
                     </div>
 
-                    {/* 2. The Frame (Crop Window) - Border */}
-                    <div className="absolute inset-0 border border-blue-500/80 shadow-[0_0_0_1px_rgba(0,0,0,0.5)] z-10 pointer-events-none rounded-[1px]"></div>
-                    
-                    {/* 3. The Actual Cropped Image (High Opacity) inside the Frame */}
-                    <div className="absolute inset-0 overflow-hidden">
-                        <div className="absolute top-1/2 left-1/2 flex items-center justify-center"
-                            style={{ 
-                                width: renderImgW, 
-                                height: renderImgH,
-                                transform: `translate(-50%, -50%) translate(${renderPanX}px, ${renderPanY}px) rotate(${layer.adjustments.rotation}deg)` 
-                            }}
-                        >
-                            <img 
-                                src={photo.previewUrl} 
-                                style={{ 
-                                    width: '100%', height: '100%', objectFit: 'cover',
-                                    filter: `brightness(${100+layer.adjustments.brightness}%) contrast(${100+layer.adjustments.contrast}%) saturate(${100+layer.adjustments.saturation}%) hue-rotate(${layer.adjustments.temperature}deg)`
-                                }}
-                                draggable={false}
-                                alt=""
-                            />
-                        </div>
-                    </div>
-                </div>
-
-                {/* Overlay Hint */}
-                <div className="absolute top-2 right-2 pointer-events-none">
-                     <Move size={16} className="text-white/50" />
+                    <div className="absolute inset-0 border border-blue-500/80 pointer-events-none rounded-[1px]" />
                 </div>
             </div>
             <p className="text-[10px] text-gray-500 text-center">
@@ -367,7 +331,6 @@ const ProSlider: React.FC<ProSliderProps> = ({
 }) => {
     const isChanged = value !== defaultValue;
     
-    // Visual calc
     let barLeft = '0%', barWidth = '0%';
     if (bipolar) {
         const range = max - min; 
@@ -400,20 +363,17 @@ const ProSlider: React.FC<ProSliderProps> = ({
             </div>
 
             <div className="relative h-4 flex items-center cursor-pointer touch-none">
-                {/* Track */}
                 <div className="absolute left-0 right-0 h-1 bg-gray-800 rounded-full overflow-hidden">
                     {bipolar && <div className="absolute left-1/2 top-0 bottom-0 w-px bg-gray-600"></div>}
                     <div className={`absolute top-0 bottom-0 transition-all duration-75 ${isChanged ? 'bg-blue-500' : 'bg-gray-600'}`} style={{ left: barLeft, width: barWidth }} />
                 </div>
                 
-                {/* Input */}
                 <input 
                     type="range" min={min} max={max} step={step} value={value} 
                     onChange={(e) => onChange(parseFloat(e.target.value))}
                     className="absolute inset-0 w-full h-full opacity-0 cursor-ew-resize z-10"
                 />
 
-                {/* Thumb */}
                 <div 
                     className={`absolute h-3 w-3 bg-gray-200 rounded-full shadow border border-gray-900 pointer-events-none transition-transform duration-75 ${isChanged ? 'bg-white scale-110' : 'scale-0 group-hover:scale-100'}`}
                     style={{ left: bipolar ? `${((value - min) / (max - min)) * 100}%` : `${((value - min) / (max - min)) * 100}%`, transform: 'translateX(-50%)' }}
