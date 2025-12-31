@@ -1,8 +1,4 @@
 
-
-
-
-
 export interface Dimensions {
   width: number;
   height: number;
@@ -52,6 +48,7 @@ export interface ImageAdjustments {
 export interface Layer {
   id: string;
   photoId: string;
+  groupId?: string; // ID for grouping multiple layers together
   x: number; // Percentage (0-100) relative to spread width
   y: number; // Percentage (0-100) relative to spread height
   width: number; // Percentage (0-100)

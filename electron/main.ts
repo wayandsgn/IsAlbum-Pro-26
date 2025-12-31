@@ -13,17 +13,18 @@ function createWindow() {
     width: 1600,
     height: 900,
     webPreferences: {
-      preload: path.join(__dirname, 'preload.js'),
+      // Use path.resolve to be absolutely sure about the path
+      preload: path.resolve(__dirname, 'preload.js'),
       contextIsolation: true,
       nodeIntegration: false,
+      sandbox: false, // CRITICAL: Allows preload to expose complex objects/APIs correctly
+      webSecurity: false // Optional: helpful for loading local images in dev, strictly handle with care in prod
     },
     icon: path.join(__dirname, '../assets/icon.svg')
   });
 
-  win.loadFile('index.html');
-  
-  // Open DevTools in development
-  // win.webContents.openDevTools();
+  // Load index.html relative to this script's location
+  win.loadFile(path.join(__dirname, '../index.html'));
 }
 
 app.whenReady().then(() => {
@@ -44,7 +45,10 @@ app.on('window-all-closed', () => {
 
 // IPC handler for native file saving
 ipcMain.handle('save-dialog', async (event, { title, defaultPath, filters, data }) => {
-    const { filePath } = await dialog.showSaveDialog({
+    const win = BrowserWindow.getFocusedWindow();
+    if (!win) return { success: false, error: 'No active window' };
+
+    const { filePath } = await dialog.showSaveDialog(win, {
         title,
         defaultPath,
         filters,
@@ -81,8 +85,12 @@ ipcMain.handle('load-image-from-path', async (event, filePath) => {
 
 // IPC handler to open a directory selection dialog
 ipcMain.handle('select-directory', async () => {
-    const { canceled, filePaths } = await dialog.showOpenDialog({
-        properties: ['openDirectory']
+    const win = BrowserWindow.getFocusedWindow();
+    if (!win) return null;
+
+    const { canceled, filePaths } = await dialog.showOpenDialog(win, {
+        properties: ['openDirectory'],
+        title: 'Selecione a pasta onde estão as fotos originais'
     });
     if (!canceled && filePaths.length > 0) {
         return filePaths[0];
@@ -95,11 +103,19 @@ ipcMain.handle('find-and-load-files', async (event, { directoryPath, filesToFind
     const foundFiles: { id: string, newPath: string, fileName: string, dataUrl: string, mimeType: string }[] = [];
     try {
         const dirContents = fs.readdirSync(directoryPath);
-        const dirFileSet = new Set(dirContents);
+        
+        // Map directory contents to lowercase for case-insensitive comparison
+        // Map: lowercaseName -> originalName
+        const dirMap = new Map<string, string>();
+        dirContents.forEach(f => dirMap.set(f.toLowerCase(), f));
 
         for (const fileToFind of filesToFind) {
-            if (dirFileSet.has(fileToFind.fileName)) {
-                const newPath = path.join(directoryPath, fileToFind.fileName);
+            const targetName = fileToFind.fileName.toLowerCase();
+            
+            if (dirMap.has(targetName)) {
+                const realFileName = dirMap.get(targetName)!;
+                const newPath = path.join(directoryPath, realFileName);
+                
                 try {
                     const buffer = fs.readFileSync(newPath);
                     const mimeType = mime.lookup(newPath) || 'application/octet-stream';

@@ -29,8 +29,8 @@ interface SingleSpreadEditorProps {
   onShowTemplates?: () => void;
   onRedistribute?: () => void;
   onOptimize?: () => void;
-  selectedLayerId?: string | null;
-  onSelectLayer?: (id: string | null) => void;
+  selectedLayerIds?: Set<string>;
+  onSelectLayerIds?: (ids: Set<string>) => void;
 }
 
 export const SingleSpreadEditor: React.FC<SingleSpreadEditorProps> = ({
@@ -40,18 +40,20 @@ export const SingleSpreadEditor: React.FC<SingleSpreadEditorProps> = ({
   onBack,
   onUpdateLayer,
   onUpdateLayers,
-  selectedLayerId: propSelectedLayerId,
-  onSelectLayer
+  selectedLayerIds: propSelectedLayerIds,
+  onSelectLayerIds
 }) => {
-  const [internalSelectedLayerId, setInternalSelectedLayerId] = useState<string | null>(null);
+  const [internalSelectedLayerIds, setInternalSelectedLayerIds] = useState<Set<string>>(new Set());
   
   // Use prop controlled state if available, otherwise local
-  const activeId = propSelectedLayerId !== undefined ? propSelectedLayerId : internalSelectedLayerId;
-  const handleSelect = (id: string | null) => {
-      if (onSelectLayer) onSelectLayer(id);
-      else setInternalSelectedLayerId(id);
+  const activeIds = propSelectedLayerIds !== undefined ? propSelectedLayerIds : internalSelectedLayerIds;
+  const handleSelect = (ids: Set<string>) => {
+      if (onSelectLayerIds) onSelectLayerIds(ids);
+      else setInternalSelectedLayerIds(ids);
   };
 
+  // Find the "primary" selected layer for adjustments (first one found)
+  const activeId = activeIds.size > 0 ? Array.from(activeIds)[0] : null;
   const selectedLayer = spread.layers.find(l => l.id === activeId);
   const selectedPhoto = selectedLayer ? photos.find(p => p.id === selectedLayer.photoId) : null;
 
@@ -84,12 +86,9 @@ export const SingleSpreadEditor: React.FC<SingleSpreadEditorProps> = ({
                   photos={photos}
                   config={config}
                   isActive={true}
-                  selectedLayerIds={activeId ? new Set([activeId]) : new Set()}
+                  selectedLayerIds={activeIds}
                   onSelectSpread={() => {}} 
-                  onSelectionChange={(ids: Set<string>) => {
-                      const id = ids.size > 0 ? Array.from(ids)[0] : null;
-                      handleSelect(id);
-                  }}
+                  onSelectionChange={handleSelect}
                   onUpdateLayers={onUpdateLayers}
                   onDeleteLayers={() => {}} 
                   onPhotoDrop={() => {}}
@@ -99,11 +98,20 @@ export const SingleSpreadEditor: React.FC<SingleSpreadEditorProps> = ({
                  <div className="mt-8 flex flex-wrap gap-3 justify-center">
                     {spread.layers.map((l, idx) => {
                              const p = photos.find(ph => ph.id === l.photoId);
-                             const isSelected = activeId === l.id;
+                             const isSelected = activeIds.has(l.id);
                              return (
                                  <button 
                                     key={l.id}
-                                    onClick={() => handleSelect(l.id)}
+                                    onClick={(e) => {
+                                        let newSet = new Set(activeIds);
+                                        if (e.shiftKey || e.ctrlKey || e.metaKey) {
+                                            if (newSet.has(l.id)) newSet.delete(l.id);
+                                            else newSet.add(l.id);
+                                        } else {
+                                            newSet = new Set([l.id]);
+                                        }
+                                        handleSelect(newSet);
+                                    }}
                                     className={`relative w-14 h-14 rounded-md overflow-hidden transition-all duration-200 border-2 ${isSelected ? 'border-blue-500 scale-110 shadow-lg z-10' : 'border-gray-800 opacity-60 hover:opacity-100 hover:scale-105'}`}
                                  >
                                      <img src={p?.previewUrl} className="w-full h-full object-cover" />
@@ -129,6 +137,7 @@ export const SingleSpreadEditor: React.FC<SingleSpreadEditorProps> = ({
               <div className="flex flex-col items-center justify-center h-64 text-gray-600 p-8 text-center">
                   <Move size={48} className="mb-4 opacity-50" />
                   <p className="text-sm">Selecione uma foto na lâmina para habilitar os ajustes.</p>
+                  {activeIds.size > 1 && <p className="text-xs text-blue-400 mt-2">Múltiplos itens selecionados.</p>}
               </div>
           ) : (
               <div className="p-5 space-y-8">
@@ -296,6 +305,7 @@ interface ProSliderProps {
     icon?: React.ElementType;
     bipolar?: boolean; // Center origin (e.g. -100 to 100)
     compact?: boolean;
+    formatValue?: (v: number) => string;
 }
 
 const ProSlider: React.FC<ProSliderProps> = ({ 
@@ -308,7 +318,8 @@ const ProSlider: React.FC<ProSliderProps> = ({
     onChange, 
     icon: Icon,
     bipolar = false,
-    compact = false
+    compact = false,
+    formatValue
 }) => {
     const isChanged = value !== defaultValue;
     

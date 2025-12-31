@@ -1,7 +1,7 @@
 
 import React, { useState, useEffect } from 'react';
 import { Unit, ColorMode, AlbumConfig, SavedProject, AlbumPreset } from '../types';
-import { Plus, Clock, FolderOpen, FileImage, Bookmark, Trash2 } from 'lucide-react';
+import { Plus, Clock, FolderOpen, FileImage, Bookmark, Trash2, LayoutTemplate } from 'lucide-react';
 
 interface WelcomeScreenProps {
   onCreateProject: (config: AlbumConfig) => void;
@@ -12,10 +12,23 @@ interface WelcomeScreenProps {
 
 const PRESETS_STORAGE_KEY = 'album_architect_presets';
 
+// Updated Default Presets with new requested sizes
 const defaultPresets: AlbumPreset[] = [
-    { id: '1', name: 'Álbum Quadrado', width: 30, height: 30, unit: 'cm', dpi: 300 },
-    { id: '2', name: 'Álbum Paisagem', width: 40, height: 30, unit: 'cm', dpi: 300 },
-    { id: '3', name: 'Álbum Retrato', width: 20, height: 30, unit: 'cm', dpi: 300 },
+    // Standard
+    { id: '1', name: 'Quadrado Clássico', width: 30, height: 30, unit: 'cm', dpi: 300 },
+    { id: '2', name: 'Paisagem Padrão', width: 30, height: 20, unit: 'cm', dpi: 300 },
+    { id: '3', name: 'Paisagem Grande', width: 40, height: 30, unit: 'cm', dpi: 300 },
+    { id: '4', name: 'Paisagem Maxi', width: 50, height: 30, unit: 'cm', dpi: 300 },
+    
+    // Panoramic
+    { id: '5', name: 'Panorâmico Ultra', width: 60, height: 25, unit: 'cm', dpi: 300 },
+    { id: '6', name: 'Panorâmico Wide', width: 50, height: 25, unit: 'cm', dpi: 300 },
+    { id: '7', name: 'Panorâmico Slim', width: 40, height: 15, unit: 'cm', dpi: 300 },
+
+    // Vertical / Portrait
+    { id: '8', name: 'Retrato Clássico', width: 20, height: 30, unit: 'cm', dpi: 300 },
+    { id: '9', name: 'Vertical Longo', width: 20, height: 60, unit: 'cm', dpi: 300 },
+    { id: '10', name: 'Vertical Tower', width: 30, height: 60, unit: 'cm', dpi: 300 },
 ];
 
 export const WelcomeScreen: React.FC<WelcomeScreenProps> = ({ 
@@ -37,7 +50,13 @@ export const WelcomeScreen: React.FC<WelcomeScreenProps> = ({
     try {
       const saved = localStorage.getItem(PRESETS_STORAGE_KEY);
       if (saved) {
-        setPresets(JSON.parse(saved));
+        // Merge defaults with saved to ensure new defaults appear even for returning users, 
+        // but prefer saved if IDs conflict (though defaults have simple IDs)
+        const parsedSaved = JSON.parse(saved) as AlbumPreset[];
+        // Simple strategy: Just use default if saved is empty, otherwise user customized list.
+        // Better: Reset to defaults + custom if needed. For now, let's just use defaults if local storage is missing/empty
+        if(parsedSaved.length > 0) setPresets(parsedSaved);
+        else setPresets(defaultPresets);
       } else {
         setPresets(defaultPresets);
       }
@@ -118,12 +137,12 @@ export const WelcomeScreen: React.FC<WelcomeScreenProps> = ({
         <h1 className="text-4xl font-bold text-blue-500 mb-2">IsAlbum Pro 26</h1>
         <p className="text-gray-400">Crie álbuns profissionais em minutos.</p>
       </div>
-      <div className="max-w-6xl w-full grid grid-cols-1 md:grid-cols-2 gap-12">
+      <div className="max-w-6xl w-full grid grid-cols-1 lg:grid-cols-2 gap-12">
         
         <form onSubmit={handleSubmit} className="bg-gray-900 p-8 rounded-xl border border-gray-800 shadow-2xl space-y-6">
           <h2 className="text-xl font-semibold flex items-center gap-2">
             <Plus className="w-5 h-5 text-blue-400" />
-            Novo Projeto
+            Configurar Projeto
           </h2>
 
           <div>
@@ -170,7 +189,7 @@ export const WelcomeScreen: React.FC<WelcomeScreenProps> = ({
           </div>
 
           <button type="button" onClick={handleSavePreset} className="w-full flex items-center justify-center gap-2 bg-gray-800 hover:bg-gray-700 border border-gray-700 text-gray-300 font-medium py-2 rounded-lg transition-colors text-sm">
-             <Bookmark size={14} /> Salvar Predefinição
+             <Bookmark size={14} /> Salvar como Predefinição
           </button>
 
           <button type="submit" className="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 rounded-lg transition-colors">
@@ -190,25 +209,32 @@ export const WelcomeScreen: React.FC<WelcomeScreenProps> = ({
 
         </form>
 
-        <div className="flex flex-col space-y-8">
-          <div>
-            <h2 className="text-xl font-semibold flex items-center gap-2 text-gray-300 mb-4">
-                <Bookmark className="w-5 h-5" /> Predefinições
+        <div className="flex flex-col space-y-8 h-full overflow-hidden">
+          <div className="flex-1 flex flex-col min-h-0">
+            <h2 className="text-xl font-semibold flex items-center gap-2 text-gray-300 mb-4 flex-shrink-0">
+                <LayoutTemplate className="w-5 h-5" /> Tamanhos Populares
             </h2>
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-2 gap-3 overflow-y-auto custom-scrollbar pr-2 pb-2">
               {presets.map(p => (
-                  <button key={p.id} onClick={() => applyPreset(p)} className="bg-gray-800 p-3 rounded-lg text-left hover:bg-gray-700 border border-gray-700 hover:border-gray-600 transition-all group relative">
+                  <button key={p.id} onClick={() => applyPreset(p)} className="bg-gray-800 p-3 rounded-lg text-left hover:bg-gray-700 border border-gray-700 hover:border-blue-500 transition-all group relative">
                     <div className="font-semibold text-gray-200">{p.name}</div>
-                    <div className="text-xs text-gray-500">{p.width}x{p.height} {p.unit} @ {p.dpi}dpi</div>
-                    <button onClick={(e) => { e.stopPropagation(); handleDeletePreset(p.id); }} className="absolute top-1 right-1 p-1 text-gray-600 hover:text-red-400 opacity-0 group-hover:opacity-100 transition-opacity">
-                        <Trash2 size={12} />
-                    </button>
+                    <div className="text-xs text-gray-500 mt-1">{p.width} x {p.height} {p.unit}</div>
+                    <div className="text-[10px] text-gray-600">@{p.dpi}dpi</div>
+                    {!defaultPresets.find(d => d.id === p.id) && (
+                        <button onClick={(e) => { e.stopPropagation(); handleDeletePreset(p.id); }} className="absolute top-2 right-2 p-1 text-gray-600 hover:text-red-400 opacity-0 group-hover:opacity-100 transition-opacity">
+                            <Trash2 size={14} />
+                        </button>
+                    )}
                   </button>
               ))}
+              {/* Reset Default Button (Hidden logic for now, just append if missing) */}
+              <button onClick={() => setPresets(defaultPresets)} className="col-span-2 text-xs text-gray-600 hover:text-gray-400 py-2 border border-dashed border-gray-800 rounded">
+                  Restaurar Padrões
+              </button>
             </div>
           </div>
 
-          <div>
+          <div className="flex-shrink-0">
             <h2 className="text-xl font-semibold flex items-center gap-2 text-gray-300 mb-4">
               <Clock className="w-5 h-5" /> Recentes
             </h2>
@@ -219,7 +245,7 @@ export const WelcomeScreen: React.FC<WelcomeScreenProps> = ({
                       <div className="flex-shrink-0 w-10 h-10 bg-gray-700 rounded-lg flex items-center justify-center group-hover:bg-blue-600 transition-colors">
                         <FileImage className="w-5 h-5 text-gray-400 group-hover:text-white" />
                       </div>
-                      <div>
+                      <div className="min-w-0">
                         <h3 className="font-medium text-sm text-gray-200 truncate">{proj.name}</h3>
                         <span className="text-xs text-gray-500">{new Date(proj.lastModified).toLocaleDateString('pt-BR')}</span>
                       </div>
@@ -227,9 +253,9 @@ export const WelcomeScreen: React.FC<WelcomeScreenProps> = ({
                   ))}
                 </div>
             ) : (
-               <div className="flex flex-col items-center justify-center text-center text-gray-600 bg-gray-900/50 border border-dashed border-gray-800 rounded-lg py-10">
-                  <FolderOpen className="w-8 h-8 mb-2" />
-                  <p className="text-sm">Nenhum projeto recente encontrado.</p>
+               <div className="flex flex-col items-center justify-center text-center text-gray-600 bg-gray-900/50 border border-dashed border-gray-800 rounded-lg py-6">
+                  <FolderOpen className="w-8 h-8 mb-2 opacity-50" />
+                  <p className="text-sm">Nenhum projeto recente.</p>
                </div>
             )}
           </div>

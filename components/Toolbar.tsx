@@ -71,9 +71,10 @@ export const Toolbar: React.FC<ToolbarProps> = ({
   canEditSpread
 }) => {
   
+  // Default to Auto Density (true) as requested
   const [minPhotos, setMinPhotos] = useState(2);
   const [maxPhotos, setMaxPhotos] = useState(6);
-  const [isAutoDensity, setIsAutoDensity] = useState(false);
+  const [isAutoDensity, setIsAutoDensity] = useState(true);
 
   const [showResizeModal, setShowResizeModal] = useState(false);
   const [resizeW, setResizeW] = useState(parseFloat(convertPxToUnit(config.spreadWidth, config.displayUnit, config.dpi).replace(',', '.')));

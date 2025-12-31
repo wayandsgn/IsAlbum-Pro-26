@@ -5,7 +5,8 @@ import { clsx } from 'clsx';
 import { 
   AlignLeft, AlignCenter, AlignRight, ArrowUpToLine, FoldVertical, ArrowDownToLine,
   Trash2 as Trash, Layout, Maximize2, Wand2, RotateCw, BringToFront, SendToBack,
-  Grid as GridIcon, Magnet, ListRestart, Lock, Unlock, Edit3, AlertTriangle, Shuffle
+  Grid as GridIcon, Magnet, ListRestart, Lock, Unlock, Edit3, AlertTriangle, Shuffle,
+  Group, Ungroup
 } from 'lucide-react';
 
 export interface AlbumCanvasProps {
@@ -26,6 +27,8 @@ export interface AlbumCanvasProps {
   canUndo?: boolean;
   selectedLayerIds?: Set<string>;
   onSelectionChange?: (selectedIds: Set<string>) => void;
+  onGroupLayers?: (spreadId: string, layerIds: string[]) => void;
+  onUngroupLayers?: (spreadId: string, layerIds: string[]) => void;
 }
 
 type InteractionMode = 'IDLE' | 'MOVING' | 'RESIZING' | 'ROTATING' | 'INTERNAL_EDIT' | 'INTERNAL_SCALE' | 'INTERNAL_ROTATE';
@@ -45,12 +48,11 @@ interface GapGuide {
 export const AlbumCanvas: React.FC<AlbumCanvasProps> = ({ 
   spread, photos, config, isActive, onSelectSpread, onUpdateLayers, onDeleteLayers, onDeleteSpread,
   onPhotoDrop, onShowTemplates, onRedistribute, onDistributeFromHere, onToggleLock, onUndo, canUndo,
-  // Fix: Renamed controlledSelectedLayerIds to selectedLayerIds to match AlbumCanvasProps
-  selectedLayerIds: controlledSelectedLayerIdsFromProps, onSelectionChange
+  selectedLayerIds: controlledSelectedLayerIdsFromProps, onSelectionChange,
+  onGroupLayers, onUngroupLayers
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
-  const [internalSelectedLayerIds, setInternalSelectedLayerIds] = useState<Set<string>>(new Set());
-  // Fix: Use the prop-controlled selectedLayerIds if available, otherwise use internal state
+  const [internalSelectedLayerIds, setInternalSelectedLayerIds] = useState<Set<string>>(new Set<string>());
   const selectedLayerIds = controlledSelectedLayerIdsFromProps ?? internalSelectedLayerIds;
 
   const [interactionMode, setInteractionMode] = useState<InteractionMode>('IDLE');
@@ -72,7 +74,6 @@ export const AlbumCanvas: React.FC<AlbumCanvasProps> = ({
   const groupBounds = useRef<{ x: number; y: number; w: number; h: number } | null>(null);
   const rotationStart = useRef<{ startAngle: number, centerX: number, centerY: number } | null>(null);
 
-  // Create a ref to hold the latest spread object to prevent stale closures in event handlers.
   const spreadRef = useRef(spread);
   useEffect(() => {
     spreadRef.current = spread;
@@ -92,7 +93,6 @@ export const AlbumCanvas: React.FC<AlbumCanvasProps> = ({
         newSet = update;
     }
     if (onSelectionChange) onSelectionChange(newSet);
-    // Fix: Only update internal state if it's not controlled by props
     if (controlledSelectedLayerIdsFromProps === undefined) setInternalSelectedLayerIds(newSet);
   };
 
@@ -105,28 +105,47 @@ export const AlbumCanvas: React.FC<AlbumCanvasProps> = ({
       onUpdateLayers(spread.id, updatedLayers);
   };
 
+  // --- SHORTCUTS ---
   useEffect(() => {
     if (!isActive) return;
     const handleKeyDown = (e: KeyboardEvent) => {
+      // DELETE
       if ((e.key === 'Delete' || e.key === 'Backspace') && selectedLayerIds.size > 0 && !editingLayerId) {
         onDeleteLayers(spread.id, Array.from(selectedLayerIds));
         handleSelectionUpdate(new Set<string>());
       }
+      // UNDO/REDO
       if ((e.metaKey || e.ctrlKey) && e.key === 'z') {
           e.preventDefault();
           if (onUndo) onUndo();
       }
+      // ESC
       if (e.key === 'Escape') {
           setEditingLayerId(null);
           setInteractionMode('IDLE');
           handleSelectionUpdate(new Set<string>());
           setContextMenu({ ...contextMenu, visible: false });
       }
+      // GROUP: Ctrl+G or Ctrl+U (User requested Ctrl+U)
+      if ((e.metaKey || e.ctrlKey) && !e.shiftKey && (e.key === 'u' || e.key === 'g')) {
+          e.preventDefault();
+          if (selectedLayerIds.size > 1 && onGroupLayers) {
+              onGroupLayers(spread.id, Array.from(selectedLayerIds));
+          }
+      }
+      // UNGROUP: Ctrl+Shift+U or Ctrl+Shift+G
+      if ((e.metaKey || e.ctrlKey) && e.shiftKey && (e.key === 'u' || e.key === 'g')) {
+          e.preventDefault();
+          if (selectedLayerIds.size > 0 && onUngroupLayers) {
+              onUngroupLayers(spread.id, Array.from(selectedLayerIds));
+          }
+      }
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [isActive, selectedLayerIds, spread.id, onDeleteLayers, onUndo, editingLayerId, contextMenu]);
+  }, [isActive, selectedLayerIds, spread.id, onDeleteLayers, onUndo, editingLayerId, contextMenu, onGroupLayers, onUngroupLayers]);
 
+  // --- MOUSE DOWN ---
   const handleLayerMouseDown = (e: React.MouseEvent, layer: Layer) => {
     e.stopPropagation();
     onSelectSpread();
@@ -148,19 +167,37 @@ export const AlbumCanvas: React.FC<AlbumCanvasProps> = ({
     setEditingLayerId(null);
     dragStart.current = { x: e.clientX, y: e.clientY };
     
+    // Logic for Group Selection
+    const layersToSelect = new Set<string>();
+    if (layer.groupId) {
+        // If clicked layer is in a group, select all peers
+        spread.layers.forEach(l => {
+            if (l.groupId === layer.groupId) layersToSelect.add(l.id);
+        });
+    } else {
+        layersToSelect.add(layer.id);
+    }
+
     let newSelection = new Set<string>(selectedLayerIds);
     
     if (e.shiftKey) {
-        if (newSelection.has(layer.id)) {
-            newSelection.delete(layer.id);
-        } else {
-            newSelection.add(layer.id);
+        // Toggle selection behavior with groups
+        if (layersToSelect.size > 0) {
+            const firstId = Array.from(layersToSelect)[0];
+            const isSelected = newSelection.has(firstId);
+            layersToSelect.forEach(id => {
+                if (isSelected) newSelection.delete(id);
+                else newSelection.add(id);
+            });
         }
         handleSelectionUpdate(newSelection);
     } else {
-        if (!newSelection.has(layer.id)) {
-            newSelection = new Set<string>([layer.id]);
-            handleSelectionUpdate(newSelection);
+        // Standard selection: If not already selected, clear and select this group/item
+        // If already selected, keep it (allows dragging multiple existing selections)
+        const isAlreadySelected = Array.from(layersToSelect).every(id => newSelection.has(id));
+        if (!isAlreadySelected) {
+            handleSelectionUpdate(layersToSelect);
+            newSelection = layersToSelect;
         }
     }
 
@@ -182,8 +219,16 @@ export const AlbumCanvas: React.FC<AlbumCanvasProps> = ({
       e.stopPropagation();
       onSelectSpread();
       
-      if (!selectedLayerIds.has(layer.id)) {
-          handleSelectionUpdate(new Set([layer.id]));
+      // Auto-select group on right click if not selected
+      let newSelection = new Set(selectedLayerIds);
+      if (!newSelection.has(layer.id)) {
+          newSelection = new Set<string>();
+          if (layer.groupId) {
+              spread.layers.forEach(l => { if (l.groupId === layer.groupId) newSelection.add(l.id); });
+          } else {
+              newSelection.add(layer.id);
+          }
+          handleSelectionUpdate(newSelection);
       }
 
       setContextMenu({
@@ -210,6 +255,7 @@ export const AlbumCanvas: React.FC<AlbumCanvasProps> = ({
       const photo = photos.find(p => p.id === layer.photoId);
       if (photo?.isMissing) return;
 
+      // Enter isolation mode (edit content)
       setEditingLayerId(layer.id);
       handleSelectionUpdate(new Set([layer.id]));
       setInteractionMode('IDLE');
@@ -272,13 +318,14 @@ export const AlbumCanvas: React.FC<AlbumCanvasProps> = ({
       onUpdateLayers(spread.id, updatedLayers);
   };
 
+  // --- MOVE / RESIZE LOGIC ---
   useEffect(() => {
     if (interactionMode === 'IDLE') return;
 
     const handleMouseMove = (e: MouseEvent) => {
       if (!containerRef.current) return;
       
-      const currentSpread = spreadRef.current; // Use the most up-to-date spread from the ref.
+      const currentSpread = spreadRef.current; 
 
       const rect = containerRef.current.getBoundingClientRect();
       const dxPx = dragStart.current ? e.clientX - dragStart.current.x : 0;
@@ -299,7 +346,21 @@ export const AlbumCanvas: React.FC<AlbumCanvasProps> = ({
             let newX = initialState.x + dxPct;
             let newY = initialState.y + dyPct;
 
-            if (selectedLayerIds.size === 1 && enableSmartGuides && !currentSpread.isLocked) {
+            // Smart Guides (Only if we are moving a single entity - Layer or Group)
+            const movingSingleEntity = (() => {
+                if (selectedLayerIds.size === 1) return true;
+                // Check if all selected layers belong to the same group
+                const groups = new Set<string>();
+                let hasUngrouped = false;
+                selectedLayerIds.forEach(id => {
+                    const l = currentSpread.layers.find(ly => ly.id === id);
+                    if (l?.groupId) groups.add(l.groupId);
+                    else hasUngrouped = true;
+                });
+                return !hasUngrouped && groups.size === 1;
+            })();
+
+            if (movingSingleEntity && enableSmartGuides && !currentSpread.isLocked) {
                 const candidatesX: { val: number, source: 'grid' | 'gap', gapStart?: number }[] = [];
                 const candidatesY: { val: number, source: 'grid' | 'gap', gapStart?: number }[] = [];
                 
@@ -462,49 +523,98 @@ export const AlbumCanvas: React.FC<AlbumCanvasProps> = ({
     return () => { window.removeEventListener('mousemove', handleMouseMove); window.removeEventListener('mouseup', handleMouseUp); };
   }, [interactionMode, activeHandle, spread.id, selectedLayerIds, aspectRatio, editingLayerId, photos, enableSmartGuides, gapPctX, gapPctY, showGrid, spread.isLocked, controlledSelectedLayerIdsFromProps]);
 
+  // --- ALIGNMENT LOGIC (UPDATED FOR GROUPS) ---
   const handleAlign = (alignment: string) => {
     if (selectedLayerIds.size === 0 || spread.isLocked) return;
 
-    const selectedLayers = spread.layers.filter(l => selectedLayerIds.has(l.id));
-    if (selectedLayers.some(l => l.isLocked)) return; 
-    
-    let minX = 0, maxX = 0, minY = 0, maxY = 0, centerX = 50, centerY = 50;
+    // Identify entities (Groups or Independent Layers)
+    const entities: { id: string, type: 'group' | 'layer', layers: Layer[], bounds: { minX: number, maxX: number, minY: number, maxY: number, width: number, height: number } }[] = [];
+    const processedLayerIds = new Set<string>();
 
-    if (selectedLayers.length > 1) {
-        minX = Math.min(...selectedLayers.map(l => l.x));
-        maxX = Math.max(...selectedLayers.map(l => l.x + l.width));
-        minY = Math.min(...selectedLayers.map(l => l.y));
-        maxY = Math.max(...selectedLayers.map(l => l.y + l.height));
-        centerX = (minX + maxX) / 2;
-        centerY = (minY + maxY) / 2;
+    spread.layers.forEach(l => {
+        if (!selectedLayerIds.has(l.id)) return;
+        if (processedLayerIds.has(l.id)) return;
+
+        if (l.groupId) {
+            // Processing a group
+            const groupLayers = spread.layers.filter(gl => gl.groupId === l.groupId);
+            groupLayers.forEach(gl => processedLayerIds.add(gl.id));
+            
+            let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+            groupLayers.forEach(gl => {
+                minX = Math.min(minX, gl.x);
+                minY = Math.min(minY, gl.y);
+                maxX = Math.max(maxX, gl.x + gl.width);
+                maxY = Math.max(maxY, gl.y + gl.height);
+            });
+            entities.push({
+                id: l.groupId,
+                type: 'group',
+                layers: groupLayers,
+                bounds: { minX, maxX, minY, maxY, width: maxX - minX, height: maxY - minY }
+            });
+        } else {
+            // Independent layer
+            processedLayerIds.add(l.id);
+            entities.push({
+                id: l.id,
+                type: 'layer',
+                layers: [l],
+                bounds: { minX: l.x, maxX: l.x + l.width, minY: l.y, maxY: l.y + l.height, width: l.width, height: l.height }
+            });
+        }
+    });
+
+    if (entities.length === 0) return;
+
+    // Determine target bounding box reference
+    let targetMinX = 0, targetMaxX = 0, targetMinY = 0, targetMaxY = 0, targetCenterX = 50, targetCenterY = 50;
+
+    if (entities.length > 1) {
+        // Align relative to selection bounds
+        targetMinX = Math.min(...entities.map(e => e.bounds.minX));
+        targetMaxX = Math.max(...entities.map(e => e.bounds.maxX));
+        targetMinY = Math.min(...entities.map(e => e.bounds.minY));
+        targetMaxY = Math.max(...entities.map(e => e.bounds.maxY));
+        targetCenterX = (targetMinX + targetMaxX) / 2;
+        targetCenterY = (targetMinY + targetMaxY) / 2;
+    } else {
+        // Align relative to canvas
+        targetMinX = 0;
+        targetMaxX = 100;
+        targetMinY = 0;
+        targetMaxY = 100;
+        targetCenterX = 50;
+        targetCenterY = 50;
     }
 
-    const updated = spread.layers.map(l => {
-      if (!selectedLayerIds.has(l.id)) return l;
-      let { x, y } = l;
+    const updatedLayersMap = new Map<string, Layer>();
+    // Fill map with original layers first
+    spread.layers.forEach(l => updatedLayersMap.set(l.id, l));
 
-      if (selectedLayers.length > 1) {
-          switch (alignment) {
-            case 'left': x = minX; break;
-            case 'center-x': x = centerX - (l.width / 2); break;
-            case 'right': x = maxX - l.width; break;
-            case 'top': y = minY; break;
-            case 'center-y': y = centerY - (l.height / 2); break;
-            case 'bottom': y = maxY - l.height; break;
-          }
-      } else {
-          switch (alignment) {
-            case 'left': x = 0; break;
-            case 'center-x': x = 50 - (l.width / 2); break;
-            case 'right': x = 100 - l.width; break;
-            case 'top': y = 0; break;
-            case 'center-y': y = 50 - (l.height / 2); break;
-            case 'bottom': y = 100 - l.height; break;
-          }
-      }
-      return { ...l, x, y };
+    entities.forEach(entity => {
+        let deltaX = 0;
+        let deltaY = 0;
+
+        switch (alignment) {
+            case 'left': deltaX = targetMinX - entity.bounds.minX; break;
+            case 'center-x': deltaX = (targetCenterX - (entity.bounds.width / 2)) - entity.bounds.minX; break;
+            case 'right': deltaX = (targetMaxX - entity.bounds.width) - entity.bounds.minX; break;
+            case 'top': deltaY = targetMinY - entity.bounds.minY; break;
+            case 'center-y': deltaY = (targetCenterY - (entity.bounds.height / 2)) - entity.bounds.minY; break;
+            case 'bottom': deltaY = (targetMaxY - entity.bounds.height) - entity.bounds.minY; break;
+        }
+
+        entity.layers.forEach(l => {
+            updatedLayersMap.set(l.id, {
+                ...l,
+                x: l.x + deltaX,
+                y: l.y + deltaY
+            });
+        });
     });
-    onUpdateLayers(spread.id, updated);
+
+    onUpdateLayers(spread.id, Array.from(updatedLayersMap.values()));
   };
 
   const handleLayerOrder = (direction: 'front' | 'back') => {
@@ -518,6 +628,10 @@ export const AlbumCanvas: React.FC<AlbumCanvasProps> = ({
       let newOrder = direction === 'front' ? [...unselected, ...selected] : [...selected, ...unselected];
       onUpdateLayers(spread.id, newOrder);
   };
+
+  // Helper to check if context menu target is part of a group
+  const contextTargetLayer = spread.layers.find(l => l.id === contextMenu.layerId);
+  const isContextTargetGrouped = !!contextTargetLayer?.groupId;
 
   return (
     <div 
@@ -670,6 +784,15 @@ export const AlbumCanvas: React.FC<AlbumCanvasProps> = ({
                          </div>
                      </div>
                  )}
+                 
+                 {/* Group Indicator */}
+                 {layer.groupId && isSelected && (
+                     <div className="absolute bottom-1 right-1 z-20">
+                         <div className="bg-blue-500 p-1 rounded-full shadow-sm text-white">
+                             <Group size={8} />
+                         </div>
+                     </div>
+                 )}
               </div>
 
               {isSelected && !isEditing && !spread.isLocked && !layer.isLocked && !photo.isMissing && (
@@ -811,6 +934,38 @@ export const AlbumCanvas: React.FC<AlbumCanvasProps> = ({
                       <><Lock size={14} className="text-gray-400" /> Bloquear</>
                   )}
               </button>
+
+              <div className="h-px bg-gray-700 my-1"></div>
+
+              {/* Grouping Actions */}
+              {selectedLayerIds.size > 1 && onGroupLayers && (
+                <button 
+                    onClick={() => {
+                        if (onGroupLayers) onGroupLayers(spread.id, Array.from(selectedLayerIds));
+                        setContextMenu({ ...contextMenu, visible: false });
+                    }}
+                    className="w-full text-left px-4 py-2 hover:bg-gray-700 flex items-center gap-2 text-sm"
+                >
+                    <Group size={14} /> Agrupar (Ctrl+U)
+                </button>
+              )}
+
+              {isContextTargetGrouped && onUngroupLayers && (
+                <button 
+                    onClick={() => {
+                        if (onUngroupLayers) {
+                            // If user specifically right clicked an grouped item, use selection
+                            onUngroupLayers(spread.id, Array.from(selectedLayerIds));
+                        }
+                        setContextMenu({ ...contextMenu, visible: false });
+                    }}
+                    className="w-full text-left px-4 py-2 hover:bg-gray-700 flex items-center gap-2 text-sm"
+                >
+                    <Ungroup size={14} /> Desagrupar (Ctrl+Shift+U)
+                </button>
+              )}
+
+              <div className="h-px bg-gray-700 my-1"></div>
 
               <button 
                   onClick={() => {

@@ -20,6 +20,37 @@ declare global {
     }
 }
 
+// --- POLYFILL FOR BROWSER ENVIRONMENT ---
+if (!window.electronAPI) {
+    console.warn("Electron API missing on module load. Using Polyfill.");
+    window.electronAPI = {
+        saveFile: async ({ defaultPath, data }) => {
+            console.log('Browser Save:', defaultPath);
+            const blob = new Blob([data], { type: 'application/octet-stream' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = defaultPath;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+            return { success: true, path: 'browser-download' };
+        },
+        loadImageFromPath: async (path) => {
+            console.warn("Browser: Cannot load local path:", path);
+            return { success: false, path, error: 'Browser environment cannot load local paths' };
+        },
+        selectDirectory: async () => {
+            alert('A seleção de pastas locais só funciona no aplicativo desktop (Electron).');
+            return null;
+        },
+        findAndLoadFiles: async () => {
+            return [];
+        }
+    };
+}
+
 type ViewState = 'WELCOME' | 'WORKSPACE';
 
 interface HistoryState {
@@ -44,7 +75,7 @@ const App: React.FC = () => {
   const [distributionVariation, setDistributionVariation] = useState(0);
   
   const [activeSpreadId, setActiveSpreadId] = useState<string | null>(null);
-  const [selectedLayerId, setSelectedLayerId] = useState<string | null>(null);
+  const [selectedLayerIds, setSelectedLayerIds] = useState<Set<string>>(new Set());
   const [editingSpreadId, setEditingSpreadId] = useState<string | null>(null);
 
   const [isExporting, setIsExporting] = useState(false);
@@ -225,6 +256,12 @@ const App: React.FC = () => {
   };
 
   const handleRelink = async () => {
+      // In case electronAPI was attached late, try to access window object directly
+      if (!window.electronAPI) {
+          alert('API do Electron não detectada. O Relink não funcionará no navegador.');
+          return;
+      }
+      
       const directoryPath = await window.electronAPI.selectDirectory();
       if (!directoryPath) return;
 
@@ -255,7 +292,6 @@ const App: React.FC = () => {
 
   const handleReturnToWelcome = () => {
       if (currentProjectId && (spreads.length > 0 || photos.length > 0)) {
-          // Trigger an auto-save before returning
           handleSaveProject();
       }
       setView('WELCOME');
@@ -390,7 +426,6 @@ const App: React.FC = () => {
       setTotalSpreads(finalSpreads.length);
       saveToHistory(finalSpreads);
 
-      // Restore active spread selection based on index
       if (finalSpreads.length > 0) {
           if (currentActiveIndex >= 0 && finalSpreads[currentActiveIndex]) {
               setActiveSpreadId(finalSpreads[currentActiveIndex].id);
@@ -451,7 +486,7 @@ const App: React.FC = () => {
           });
           if (activeSpreadId === spreadId) {
               setActiveSpreadId(null);
-              setSelectedLayerId(null);
+              setSelectedLayerIds(new Set());
           }
       }
   };
@@ -461,6 +496,29 @@ const App: React.FC = () => {
       if (s.id !== spreadId) return s;
       return { ...s, layers: updatedLayers };
     }));
+  };
+
+  // Grouping Handlers
+  const handleGroupLayers = (spreadId: string, layerIds: string[]) => {
+      if (layerIds.length < 2) return;
+      const newGroupId = Math.random().toString(36).substr(2, 9);
+      updateSpreadsWithHistory(prev => prev.map(s => {
+          if (s.id !== spreadId) return s;
+          return {
+              ...s,
+              layers: s.layers.map(l => layerIds.includes(l.id) ? { ...l, groupId: newGroupId } : l)
+          };
+      }));
+  };
+
+  const handleUngroupLayers = (spreadId: string, layerIds: string[]) => {
+      updateSpreadsWithHistory(prev => prev.map(s => {
+          if (s.id !== spreadId) return s;
+          return {
+              ...s,
+              layers: s.layers.map(l => layerIds.includes(l.id) ? { ...l, groupId: undefined } : l)
+          };
+      }));
   };
 
   const handleUpdateActiveLayer = (updatedLayer: Layer) => {
@@ -491,9 +549,9 @@ const App: React.FC = () => {
           return { ...s, layers: newLayout };
       }));
       
-    if (selectedLayerId && layerIds.includes(selectedLayerId)) {
-        setSelectedLayerId(null);
-    }
+    const newSelection = new Set(selectedLayerIds);
+    layerIds.forEach(id => newSelection.delete(id));
+    setSelectedLayerIds(newSelection);
   };
 
   const handleRedistributeSpread = (spreadId: string) => {
@@ -517,7 +575,6 @@ const App: React.FC = () => {
             return { ...s, layers: newLayers };
         }
 
-        // --- NEW LOGIC FOR HANDLING LOCKED LAYERS (v2.0) ---
         let lockedMinX = Infinity, lockedMinY = Infinity, lockedMaxX = -Infinity, lockedMaxY = -Infinity;
         lockedLayers.forEach(l => {
             lockedMinX = Math.min(lockedMinX, l.x);
@@ -617,7 +674,6 @@ const App: React.FC = () => {
                     .map(l => photos.find(p => p.id === l.photoId)).filter((p): p is Photo => !!p);
                 
                 const lockedInSource = sourceSpread.layers.filter(l => l.isLocked && l.photoId !== photoId);
-                const unlockedPhotos = remainingPhotos.filter(p => !lockedInSource.some(l => l.photoId === p.id));
                 
                 if (lockedInSource.length > 0) {
                      const newLayout = generateStructuredLayout(remainingPhotos, config); 
@@ -730,7 +786,6 @@ const App: React.FC = () => {
       const photosInSpread = spread.layers.map(l => photos.find(p => p.id === l.photoId)).filter((p): p is Photo => !!p);
       const { results, exhausted } = generateUniqueVariations(photosInSpread, config, seenLayoutHashes, 6);
       if (results.length > 0) setLayoutSuggestions(prev => [...prev, ...results]);
-      // Exhausted check removed to allow infinite generation
   };
   
   const applyTemplate = (layers: Layer[]) => {
@@ -740,7 +795,7 @@ const App: React.FC = () => {
   };
 
   const activeSpread = spreads.find(s => s.id === activeSpreadId);
-  const activeLayer = activeSpread?.layers.find(l => l.id === selectedLayerId) || null;
+  const activeLayer = activeSpread?.layers.find(l => selectedLayerIds.has(l.id)) || null;
   
   const photoUsage = new Map<string, number[]>();
   spreads.forEach(s => {
@@ -804,7 +859,7 @@ const App: React.FC = () => {
         />
 
         <main className="flex-1 overflow-y-auto bg-gray-900/50 p-12 flex flex-col items-center custom-scrollbar"
-              onClick={() => { setSelectedLayerId(null); }}
+              onClick={() => { setSelectedLayerIds(new Set()); }}
         >
             {spreads.length === 0 ? (
                 <div className="flex flex-col items-center justify-center h-full text-gray-500 text-center">
@@ -819,10 +874,14 @@ const App: React.FC = () => {
                             photos={photos}
                             config={config}
                             isActive={spread.id === activeSpreadId}
-                            selectedLayerIds={selectedLayerId && spread.id === activeSpreadId ? new Set([selectedLayerId]) : new Set()}
+                            selectedLayerIds={spread.id === activeSpreadId ? selectedLayerIds : new Set()}
                             onSelectionChange={(ids) => {
-                                if (ids.size > 0) { setActiveSpreadId(spread.id); setSelectedLayerId(Array.from(ids)[0]); } 
-                                else { if (activeSpreadId === spread.id) setSelectedLayerId(null); }
+                                if (ids.size > 0) { 
+                                    setActiveSpreadId(spread.id); 
+                                    setSelectedLayerIds(ids); 
+                                } else { 
+                                    if (activeSpreadId === spread.id) setSelectedLayerIds(new Set()); 
+                                }
                             }}
                             onSelectSpread={() => setActiveSpreadId(spread.id)}
                             onUpdateLayers={handleUpdateLayers}
@@ -835,6 +894,8 @@ const App: React.FC = () => {
                             onToggleLock={() => handleToggleLockSpread(spread.id)}
                             onUndo={handleUndo}
                             canUndo={historyIndex.current > 0}
+                            onGroupLayers={handleGroupLayers}
+                            onUngroupLayers={handleUngroupLayers}
                         />
                         
                         <div className="py-6 flex items-center justify-center relative group">
@@ -885,8 +946,8 @@ const App: React.FC = () => {
                       }));
                   }}
                   onUpdateLayers={handleUpdateLayers}
-                  selectedLayerId={selectedLayerId}
-                  onSelectLayer={setSelectedLayerId}
+                  selectedLayerIds={selectedLayerIds}
+                  onSelectLayerIds={setSelectedLayerIds}
               />
           </div>
       )}
